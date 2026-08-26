@@ -272,6 +272,14 @@ project "demoreel"
 	removeplatforms { "*null" }
 	removeplatforms { "ps2" } -- for now
 
+project "clumpview"
+	kind "WindowedApp"
+	characterset ("MBCS")
+	skeltool("clumpview")
+	entrypoint("WinMainCRTStartup")
+	removeplatforms { "*null" }
+	removeplatforms { "ps2" } -- has its own Makefile
+
 project "ska2anm"
 	kind "ConsoleApp"
 	characterset ("MBCS")
