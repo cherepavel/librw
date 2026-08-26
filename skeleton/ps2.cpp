@@ -29,28 +29,31 @@ float GetTimeF(void);
  * Pad
  */
 
+struct PadBtns
+{
+	unsigned short l2 : 1;
+	unsigned short r2 : 1;
+	unsigned short l1 : 1;
+	unsigned short r1 : 1;
+	unsigned short triangle : 1;
+	unsigned short circle : 1;
+	unsigned short cross : 1;
+	unsigned short square : 1;
+	unsigned short select : 1;
+	unsigned short l3 : 1;
+	unsigned short r3 : 1;
+	unsigned short start : 1;
+	unsigned short Dup : 1;
+	unsigned short Dright : 1;
+	unsigned short Ddown : 1;
+	unsigned short Dleft : 1;
+};
+
 struct PadData
 {
 	union {
 		unsigned short bits;
-		struct {
-			unsigned short l2 : 1;
-			unsigned short r2 : 1;
-			unsigned short l1 : 1;
-			unsigned short r1 : 1;
-			unsigned short triangle : 1;
-			unsigned short circle : 1;
-			unsigned short cross : 1;
-			unsigned short square : 1;
-			unsigned short select : 1;
-			unsigned short l3 : 1;
-			unsigned short r3 : 1;
-			unsigned short start : 1;
-			unsigned short Dup : 1;
-			unsigned short Dright : 1;
-			unsigned short Ddown : 1;
-			unsigned short Dleft : 1;
-		};
+		PadBtns btns;
 	};
 	/* down/right is positive */
 	float rX, rY;
@@ -64,7 +67,7 @@ struct Pad
 };
 
 static bool gotPadirx;
-static Pad pad;
+static Pad syspad;
 static u_long128 pad_dma_buf[scePadDmaBufferMax] __attribute__((aligned(64)));
 
 #define EPSILON 0.2f
@@ -142,12 +145,21 @@ PadEvents(void)
 {
 	int i, key;
 
-	UpdatePad(&pad);
+	UpdatePad(&syspad);
+
+	// analog state for apps that want it (camera controls)
+	sk::pad.connected = gotPadirx;
+	sk::pad.buttons = syspad.now.bits;
+	sk::pad.leftx = syspad.now.lX;
+	sk::pad.lefty = syspad.now.lY;
+	sk::pad.rightx = syspad.now.rX;
+	sk::pad.righty = syspad.now.rY;
+
 	for(i = 0; i < (int)(sizeof(padkeymap)/sizeof(padkeymap[0])); i++){
 		key = padkeymap[i].key;
-		if(pad.rising.bits & padkeymap[i].mask)
+		if(syspad.rising.bits & padkeymap[i].mask)
 			EventHandler(KEYDOWN, &key);
-		if(pad.falling.bits & padkeymap[i].mask)
+		if(syspad.falling.bits & padkeymap[i].mask)
 			EventHandler(KEYUP, &key);
 	}
 }
@@ -254,6 +266,39 @@ namespace sk {
 void
 SetMousePosition(int x, int y)
 {
+}
+
+// pcsx2 wants host:, the SCE TOOL wants host0:
+#ifndef SKEL_HOSTPREFIX
+#define SKEL_HOSTPREFIX "host:"
+#endif
+const char *hostPrefix = SKEL_HOSTPREFIX;
+
+char*
+GetFilePath(char *dst, const char *path)
+{
+#ifdef SKEL_CDROM
+	char *p;
+
+	// cdrom0:\SOME\PATH.EXT;1
+	strcpy(dst, "cdrom0:\\");
+	strcat(dst, path);
+	for(p = dst+8; *p; p++){
+		if(islower(*p))
+			*p = toupper(*p);
+		if(*p == '/')
+			*p = '\\';
+	}
+	strcat(dst, ";1");
+#else
+	// absolute paths go through as they are, relative ones
+	// need the ./ or the host fs won't find them
+	strcpy(dst, hostPrefix);
+	if(path[0] != '/')
+		strcat(dst, "./");
+	strcat(dst, path);
+#endif
+	return dst;
 }
 
 }
