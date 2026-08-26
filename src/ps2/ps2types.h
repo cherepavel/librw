@@ -2,15 +2,33 @@
 
 #include <eetypes.h>
 
+#ifndef __int8_t_defined
 typedef char int8_t;
+#endif
+#ifndef __int16_t_defined
 typedef short int16_t;
+#endif
+#ifndef __int32_t_defined
 typedef int int32_t;
+#endif
+#ifndef __int64_t_defined
 typedef long long int64_t;
+#endif
+#ifndef __uint8_t_defined
 typedef unsigned char uint8_t;
+#endif
+#ifndef __uint16_t_defined
 typedef unsigned short uint16_t;
+#endif
+#ifndef __uint32_t_defined
 typedef unsigned int uint32_t;
+#endif
+#ifndef __uint64_t_defined
 typedef unsigned long long uint64_t;
+#endif
+#ifndef __uintptr_t_defined
 typedef unsigned int uintptr_t;
+#endif
 typedef u_long128 uint128_t;
 
 typedef union QWord QWord;

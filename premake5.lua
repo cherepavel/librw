@@ -38,6 +38,11 @@ newoption {
 	default     = "../SDL3-3.2.22",
 }
 
+newoption {
+	trigger     = "freesce",
+	description = "ps2: build against freesce with its own ee-gcc 2.9, instead of the SCE SDK"
+}
+
 workspace "librw"
 	location "build"
 	language "C++"
@@ -82,10 +87,33 @@ workspace "librw"
 	filter { "platforms:ps2" }
 		defines { "RW_PS2" }
 		toolset "gcc"
-		gccprefix 'ee-'
-		buildoptions { "-nostdlib", "-fno-common" }
-		includedirs { "$(PS2SDK)/ee/include", "$(PS2SDK)/common/include" }
 		optimize "Off"
+		if _OPTIONS["freesce"] then
+			-- freesce, by the xtc convention: two roots, two axes.
+			-- FREESCE is the SDK vintage -- a tree root with
+			-- ee/include and ee/lib under it, which is how an
+			-- install and a git worktree are both laid out -- and
+			-- FREESCE_GCC is the compiler root (an env var read by
+			-- the tools/freesce wrappers), which is not
+			-- SDK-versioned and so does not derive from it. Both
+			-- default to /usr/local/freesce. A premake-time choice
+			-- because the 2.9 and 3.2 C++ ABIs don't link: one
+			-- flavor per generated tree. The wrappers also strip
+			-- premake's gcc-3-style dependency flags, which the
+			-- 2.9 driver rejects.
+			gccprefix '../tools/freesce/ee-'
+			buildoptions { "-fno-common", "-fno-exceptions", "-mno-abicalls", "-G0" }
+			makesettings [[
+FREESCE ?= /usr/local/freesce
+FREESCE_GCC ?= /usr/local/freesce/ee/gcc
+export FREESCE_GCC
+]]
+			includedirs { "$(FREESCE)/ee/include" }
+		else
+			gccprefix 'ee-'
+			buildoptions { "-nostdlib", "-fno-common" }
+			includedirs { "$(PS2SDK)/ee/include", "$(PS2SDK)/common/include" }
+		end
 
 	filter { "platforms:*amd64*" }
 		architecture "x86_64"
@@ -120,10 +148,14 @@ workspace "librw"
 	Bindir = "bin/%{cfg.platform}/%{cfg.buildcfg}"
 
 function vucode()
+	-- with --freesce, its own dvp-as by its root, not from PATH
+	local dvpas = _OPTIONS["freesce"]
+		and '$(or $(FREESCE_GCC),/usr/local/freesce/ee/gcc)/bin/ee-dvp-as'
+		or 'ee-dvp-as'
 	filter "files:**.dsm"
 		buildmessage 'dvp-as %{file.name}'
 		buildcommands {
-			'cpp -x assembler-with-cpp "%{file.abspath}" | ee-dvp-as -I "%{file.directory}" -o "%{cfg.objdir}/%{file.basename}.o"'
+			'cpp -x assembler-with-cpp "%{file.abspath}" | ' .. dvpas .. ' -I "%{file.directory}" -o "%{cfg.objdir}/%{file.basename}.o"'
 		}
 		buildoutputs { '%{cfg.objdir}/%{file.basename}.o' }
 	filter {}
