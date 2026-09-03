@@ -98,6 +98,7 @@ add_library(librw
     psp/psp.cpp
     psp/pspdevice.cpp
     psp/pspnative.cpp
+    psp/pspraster.cpp
     psp/rwpsp.h
     psp/rwpspimpl.h
 )

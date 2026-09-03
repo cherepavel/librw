@@ -8,7 +8,7 @@
 #include "../rwpipeline.h"
 #include "../rwobjects.h"
 #include "../rwengine.h"
-#include "rwpsp.h"
+#include "rwpspimpl.h"
 
 namespace rw {
 namespace psp {
@@ -16,8 +16,18 @@ namespace psp {
 static void*
 driverOpen(void *object, int32, int32)
 {
-	// Raster and geometry hooks are introduced in the next vertical slice.
 	assert(engine->driver[PLATFORM_PSP] != nil);
+	Driver *driver = engine->driver[PLATFORM_PSP];
+	driver->rasterNativeOffset = nativeRasterOffset;
+	driver->rasterCreate = rasterCreate;
+	driver->rasterLock = rasterLock;
+	driver->rasterUnlock = rasterUnlock;
+	driver->rasterLockPalette = rasterLockPalette;
+	driver->rasterUnlockPalette = rasterUnlockPalette;
+	driver->rasterNumLevels = rasterNumLevels;
+	driver->imageFindRasterFormat = imageFindRasterFormat;
+	driver->rasterFromImage = rasterFromImage;
+	driver->rasterToImage = rasterToImage;
 	return object;
 }
 
@@ -30,6 +40,7 @@ driverClose(void *object, int32, int32)
 void
 registerPlatformPlugins(void)
 {
+	registerNativeRaster();
 	Driver::registerPlugin(PLATFORM_PSP, 0, PLATFORM_PSP,
 	    driverOpen, driverClose);
 }
