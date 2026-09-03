@@ -28,11 +28,13 @@ readPNG(const char *filename)
 	LodePNGState state;
 	lodepng_state_init(&state);
 	uint8 *raw = nil;
-	uint32 w, h;
+	// lodepng's ABI uses unsigned explicitly; uint32_t is unsigned long in
+	// PSPSDK's newlib headers even though both types are 32 bits wide.
+	unsigned w, h;
 
 	// First try: decode without conversion to see if we understand the format
 	state.decoder.color_convert = 0;
-	uint32 error = lodepng_decode(&raw, &w, &h, &state, data, length);
+	unsigned error = lodepng_decode(&raw, &w, &h, &state, data, length);
 	if(error){
 		RWERROR((ERR_GENERAL, lodepng_error_text(error)));
 		return nil;

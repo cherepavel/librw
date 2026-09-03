@@ -94,8 +94,23 @@ add_library(librw
     ps2/rwps2.h
     ps2/rwps2impl.h
     ps2/rwps2plg.h
+
+    psp/psp.cpp
+    psp/pspdevice.cpp
+    psp/pspnative.cpp
+    psp/rwpsp.h
+    psp/rwpspimpl.h
 )
 add_library(librw::librw ALIAS librw)
+
+if(LIBRW_PLATFORM_PSP)
+    # These backends are host-buildable reference code, but PSPSDK must not
+    # compile or link foreign renderer implementations into the PSP library.
+    set_source_files_properties(
+        ps2/ps2raster.cpp
+        PROPERTIES HEADER_FILE_ONLY TRUE
+    )
+endif()
 
 target_include_directories(librw
     INTERFACE
@@ -122,7 +137,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang
         PRIVATE
             "-Wall"
     )
-    if (NOT LIBRW_PLATFORM_PS2)
+    if (NOT LIBRW_PLATFORM_PS2 AND NOT LIBRW_PLATFORM_PSP)
         target_compile_options(librw
             PRIVATE
                 "-Wextra"

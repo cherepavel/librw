@@ -239,6 +239,10 @@ destroyNativeData(void *object, int32 offset, int32 size)
 	Geometry *geometry = (Geometry*)object;
 	if(geometry->instData == nil)
 		return object;
+#ifdef RW_PSP
+	// No PSP-native geometry is created until the static geometry slice lands.
+	return object;
+#else
 	if(geometry->instData->platform == PLATFORM_PS2)
 		return ps2::destroyNativeData(object, offset, size);
 	if(geometry->instData->platform == PLATFORM_WDGL)
@@ -252,11 +256,19 @@ destroyNativeData(void *object, int32 offset, int32 size)
 	if(geometry->instData->platform == PLATFORM_GL3)
 		return gl3::destroyNativeData(object, offset, size);
 	return object;
+#endif
 }
 
 static Stream*
 readNativeData(Stream *stream, int32 len, void *object, int32 o, int32 s)
 {
+#ifdef RW_PSP
+	(void)object;
+	(void)o;
+	(void)s;
+	stream->seek(len);
+	return stream;
+#else
 	ChunkHeaderInfo header;
 	uint32 libid;
 	uint32 platform;
@@ -285,6 +297,7 @@ readNativeData(Stream *stream, int32 len, void *object, int32 o, int32 s)
 		wdgl::readNativeData(stream, len, object, o, s);
 	}
 	return stream;
+#endif
 }
 
 static Stream*
@@ -293,6 +306,9 @@ writeNativeData(Stream *stream, int32 len, void *object, int32 o, int32 s)
 	Geometry *geometry = (Geometry*)object;
 	if(geometry->instData == nil)
 		return stream;
+#ifdef RW_PSP
+	return stream;
+#else
 	if(geometry->instData->platform == PLATFORM_PS2)
 		return ps2::writeNativeData(stream, len, object, o, s);
 	else if(geometry->instData->platform == PLATFORM_WDGL)
@@ -304,6 +320,7 @@ writeNativeData(Stream *stream, int32 len, void *object, int32 o, int32 s)
 	else if(geometry->instData->platform == PLATFORM_D3D9)
 		return d3d9::writeNativeData(stream, len, object, o, s);
 	return stream;
+#endif
 }
 
 static int32
@@ -312,6 +329,9 @@ getSizeNativeData(void *object, int32 offset, int32 size)
 	Geometry *geometry = (Geometry*)object;
 	if(geometry->instData == nil)
 		return 0;
+#ifdef RW_PSP
+	return 0;
+#else
 	if(geometry->instData->platform == PLATFORM_PS2)
 		return ps2::getSizeNativeData(object, offset, size);
 	else if(geometry->instData->platform == PLATFORM_WDGL)
@@ -323,6 +343,7 @@ getSizeNativeData(void *object, int32 offset, int32 size)
 	else if(geometry->instData->platform == PLATFORM_D3D9)
 		return d3d9::getSizeNativeData(object, offset, size);
 	return 0;
+#endif
 }
 
 void

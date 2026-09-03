@@ -10,6 +10,7 @@
 #include "rwcharset.h"
 
 #include "ps2/rwps2.h"
+#include "psp/rwpsp.h"
 #include "d3d/rwd3d.h"
 #include "gl/rwgl3.h"
 
@@ -241,4 +242,3 @@ Charset::printBuffered(const char *str, int32 x, int32 y, bool32 hideSpaces)
 }
 
 #endif
-

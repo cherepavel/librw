@@ -11,6 +11,7 @@
 #include "rwobjects.h"
 #include "rwengine.h"
 #include "ps2/rwps2.h"
+#include "psp/rwpsp.h"
 #include "d3d/rwxbox.h"
 #include "d3d/rwd3d.h"
 #include "d3d/rwd3d8.h"
@@ -230,12 +231,16 @@ Engine::init(MemoryFunctions *memfuncs)
 	World::numAllocated = 0;
 
 	// driver plugin attach
+#ifdef RW_PSP
+	psp::registerPlatformPlugins();
+#else
 	ps2::registerPlatformPlugins();
 	xbox::registerPlatformPlugins();
 	d3d8::registerPlatformPlugins();
 	d3d9::registerPlatformPlugins();
 	wdgl::registerPlatformPlugins();
 	gl3::registerPlatformPlugins();
+#endif
 
 	Engine::state = Initialized;
 	return 1;
@@ -266,6 +271,8 @@ Engine::open(EngineOpenParams *p)
 	// Device and possibly OS specific!
 #ifdef RW_PS2
 	engine->device = ps2::renderdevice;
+#elif RW_PSP
+	engine->device = psp::renderdevice;
 #elif RW_GL3
 	engine->device = gl3::renderdevice;
 #elif RW_D3D9
@@ -337,7 +344,9 @@ Engine::term(void)
 
 	// This has to be reset because it won't be opened again otherwise
 	// TODO: maybe reset more stuff here?
+#ifndef RW_PSP
 	d3d::nativeRasterOffset = 0;
+#endif
 
 	Engine::state = Dead;
 }

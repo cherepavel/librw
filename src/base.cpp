@@ -27,6 +27,8 @@ int32 version = 0x36003;
 int32 build = 0xFFFF;
 #ifdef RW_PS2
 	int32 platform = PLATFORM_PS2;
+#elif RW_PSP
+	int32 platform = PLATFORM_PSP;
 #elif RW_WDGL
 	int32 platform = PLATFORM_WDGL;
 #elif RW_GL3

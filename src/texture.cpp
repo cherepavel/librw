@@ -11,6 +11,7 @@
 #include "rwobjects.h"
 #include "rwengine.h"
 #include "ps2/rwps2.h"
+#include "psp/rwpsp.h"
 #include "d3d/rwd3d.h"
 #include "d3d/rwxbox.h"
 #include "d3d/rwd3d8.h"
@@ -471,6 +472,10 @@ Texture::streamReadNative(Stream *stream)
 	}
 	uint32 platform = stream->readU32();
 	stream->seek(-16);
+#ifdef RW_PSP
+	if(platform == PLATFORM_PSP)
+		return psp::readNativeTexture(stream);
+#else
 	if(platform == FOURCC_PS2)
 		return ps2::readNativeTexture(stream);
 	if(platform == PLATFORM_D3D8)
@@ -481,6 +486,7 @@ Texture::streamReadNative(Stream *stream)
 		return xbox::readNativeTexture(stream);
 	if(platform == PLATFORM_GL3)
 		return gl3::readNativeTexture(stream);
+#endif
 	assert(0 && "unsupported platform");
 	return nil;
 }
@@ -488,6 +494,12 @@ Texture::streamReadNative(Stream *stream)
 void
 Texture::streamWriteNative(Stream *stream)
 {
+#ifdef RW_PSP
+	if(this->raster->platform == PLATFORM_PSP)
+		psp::writeNativeTexture(this, stream);
+	else
+		assert(0 && "unsupported platform");
+#else
 	if(this->raster->platform == PLATFORM_PS2)
 		ps2::writeNativeTexture(this, stream);
 	else if(this->raster->platform == PLATFORM_D3D8)
@@ -500,11 +512,16 @@ Texture::streamWriteNative(Stream *stream)
 		gl3::writeNativeTexture(this, stream);
 	else
 		assert(0 && "unsupported platform");
+#endif
 }
 
 uint32
 Texture::streamGetSizeNative(void)
 {
+#ifdef RW_PSP
+	if(this->raster->platform == PLATFORM_PSP)
+		return psp::getSizeNativeTexture(this);
+#else
 	if(this->raster->platform == PLATFORM_PS2)
 		return ps2::getSizeNativeTexture(this);
 	if(this->raster->platform == PLATFORM_D3D8)
@@ -515,6 +532,7 @@ Texture::streamGetSizeNative(void)
 		return xbox::getSizeNativeTexture(this);
 	if(this->raster->platform == PLATFORM_GL3)
 		return gl3::getSizeNativeTexture(this);
+#endif
 	assert(0 && "unsupported platform");
 	return 0;
 }
