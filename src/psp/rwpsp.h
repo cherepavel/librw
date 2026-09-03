@@ -29,6 +29,7 @@ struct NativeRaster
 };
 
 bool32 getNativeRaster(Raster *raster, NativeRaster *native);
+bool32 getNativeRasterLevel(Raster *raster, int32 level, NativeRaster *native);
 
 struct Im2DVertex
 {

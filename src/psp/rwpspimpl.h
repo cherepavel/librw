@@ -9,6 +9,13 @@ int deviceSystem(DeviceReq req, void *arg, int32 n);
 
 extern int32 nativeRasterOffset;
 struct PspRaster {
+	struct MipLevel {
+		uint8 *pixels;
+		void *allocation;
+		uint32 size;
+		int32 width, height, stride;
+		bool32 swizzled;
+	} mipmaps[9];
 	uint8 *pixels;
 	void *allocation;
 	uint8 *palette;
@@ -22,6 +29,8 @@ struct PspRaster {
 	void *lockAllocation;
 	uint8 *lockPixels;
 	bool32 swizzled;
+	int32 numLevels;
+	int32 lockLevel;
 };
 #define GETPSPRASTEREXT(raster) (PLUGINOFFSET(PspRaster, raster, nativeRasterOffset))
 void registerNativeRaster(void);
