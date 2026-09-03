@@ -473,7 +473,7 @@ Texture::streamReadNative(Stream *stream)
 	uint32 platform = stream->readU32();
 	stream->seek(-16);
 #ifdef RW_PSP
-	if(platform == PLATFORM_PSP)
+	if(platform == PLATFORM_PSP || platform == PLATFORM_D3D8)
 		return psp::readNativeTexture(stream);
 #else
 	if(platform == FOURCC_PS2)
