@@ -37,6 +37,8 @@ destroyNativeRaster(void *object, int32 offset, int32)
 		rwFree(native->allocation);
 	if(native->paletteAllocation)
 		rwFree(native->paletteAllocation);
+	if(native->lockAllocation)
+		rwFree(native->lockAllocation);
 	memset(native, 0, sizeof(*native));
 	return object;
 }
@@ -80,6 +82,8 @@ rasterCreate(Raster *raster)
 	native->bytesPerPixel = bpp;
 	native->pixelFormat = pixelFormat;
 	native->size = raster->stride*raster->height;
+	native->swizzled = raster->type == Raster::TEXTURE &&
+		(raster->stride & 15) == 0 && (raster->height & 7) == 0;
 	if(raster->width == 0 || raster->height == 0){
 		raster->flags |= Raster::DONTALLOCATE;
 		native->size = 0;
@@ -113,8 +117,25 @@ rasterLock(Raster *raster, int32 level, int32 lockMode)
 	PspRaster *native = GETPSPRASTEREXT(raster);
 	if(level != 0 || native->pixels == nil || raster->privateFlags != 0)
 		return nil;
+	if(native->swizzled){
+		native->lockAllocation = rwMalloc(native->size + 15,
+			MEMDUR_FUNCTION | ID_RASTERPSP);
+		if(native->lockAllocation == nil)
+			return nil;
+		native->lockPixels = (uint8*)(((uintptr)native->lockAllocation + 15) & ~(uintptr)15);
+		if((lockMode & Raster::LOCKNOFETCH) == 0){
+			const int32 rowBlocks = raster->stride/16;
+			for(int32 y = 0; y < raster->height; y++)
+				for(int32 x = 0; x < raster->stride; x++){
+					int32 block = x/16 + (y/8)*rowBlocks;
+					native->lockPixels[y*raster->stride + x] =
+						native->pixels[block*128 + (y&7)*16 + (x&15)];
+				}
+		}
+	}else
+		native->lockPixels = native->pixels;
 	native->lockMode = lockMode;
-	raster->pixels = native->pixels;
+	raster->pixels = native->lockPixels;
 	raster->privateFlags = lockMode & Raster::LOCKWRITE ?
 		Raster::PRIVATELOCK_WRITE : Raster::PRIVATELOCK_READ;
 	return raster->pixels;
@@ -126,8 +147,21 @@ rasterUnlock(Raster *raster, int32 level)
 	PspRaster *native = GETPSPRASTEREXT(raster);
 	if(level != 0 || raster->privateFlags == 0)
 		return;
+	if((native->lockMode & Raster::LOCKWRITE) && native->swizzled){
+		const int32 rowBlocks = raster->stride/16;
+		for(int32 y = 0; y < raster->height; y++)
+			for(int32 x = 0; x < raster->stride; x++){
+				int32 block = x/16 + (y/8)*rowBlocks;
+				native->pixels[block*128 + (y&7)*16 + (x&15)] =
+					native->lockPixels[y*raster->stride + x];
+			}
+	}
 	if(native->lockMode & Raster::LOCKWRITE)
 		sceKernelDcacheWritebackRange(native->pixels, native->size);
+	if(native->lockAllocation)
+		rwFree(native->lockAllocation);
+	native->lockAllocation = nil;
+	native->lockPixels = nil;
 	native->lockMode = 0;
 	raster->pixels = nil;
 	raster->privateFlags = 0;
@@ -160,6 +194,22 @@ rasterUnlockPalette(Raster *raster)
 		Raster::PRIVATELOCK_WRITE_PALETTE);
 }
 int32 rasterNumLevels(Raster *) { return 1; }
+
+bool32
+getNativeRaster(Raster *raster, NativeRaster *result)
+{
+	if(raster == nil || result == nil || raster->platform != PLATFORM_PSP)
+		return 0;
+	PspRaster *native = GETPSPRASTEREXT(raster);
+	if(native->pixels == nil)
+		return 0;
+	result->pixels = native->pixels;
+	result->palette = native->palette;
+	result->pixelFormat = native->pixelFormat;
+	result->bufferWidth = raster->stride/native->bytesPerPixel;
+	result->swizzled = native->swizzled;
+	return 1;
+}
 
 bool32
 imageFindRasterFormat(Image *image, int32 type, int32 *width, int32 *height,

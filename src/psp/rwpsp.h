@@ -19,6 +19,17 @@ Texture *readNativeTexture(Stream *stream);
 void writeNativeTexture(Texture *texture, Stream *stream);
 uint32 getSizeNativeTexture(Texture *texture);
 
+struct NativeRaster
+{
+	const void *pixels;
+	const void *palette;
+	int32 pixelFormat;
+	int32 bufferWidth;
+	bool32 swizzled;
+};
+
+bool32 getNativeRaster(Raster *raster, NativeRaster *native);
+
 struct Im2DVertex
 {
 	float32 x, y, z, cameraZ;

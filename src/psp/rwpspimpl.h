@@ -19,6 +19,9 @@ struct PspRaster {
 	int32 bytesPerPixel;
 	int32 lockMode;
 	int32 paletteLockMode;
+	void *lockAllocation;
+	uint8 *lockPixels;
+	bool32 swizzled;
 };
 #define GETPSPRASTEREXT(raster) (PLUGINOFFSET(PspRaster, raster, nativeRasterOffset))
 void registerNativeRaster(void);
