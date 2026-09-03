@@ -35,6 +35,8 @@ destroyNativeRaster(void *object, int32 offset, int32)
 	PspRaster *native = PLUGINOFFSET(PspRaster, object, offset);
 	if(native->allocation)
 		rwFree(native->allocation);
+	if(native->paletteAllocation)
+		rwFree(native->paletteAllocation);
 	memset(native, 0, sizeof(*native));
 	return object;
 }
@@ -49,6 +51,11 @@ registerNativeRaster(void)
 static int32
 getFormatInfo(int32 format, int32 *depth, int32 *pixelFormat)
 {
+	if(format & Raster::PAL8){
+		*depth = 8;
+		*pixelFormat = GU_PSM_T8;
+		return 1;
+	}
 	switch(format & 0xF00){
 	case Raster::C565:  *depth = 16; *pixelFormat = GU_PSM_5650; return 2;
 	case Raster::C1555: *depth = 16; *pixelFormat = GU_PSM_5551; return 2;
@@ -83,6 +90,15 @@ rasterCreate(Raster *raster)
 		}
 		native->pixels = (uint8*)(((uintptr)native->allocation + 15) & ~(uintptr)15);
 		memset(native->pixels, 0, native->size);
+		if(raster->format & Raster::PAL8){
+			native->paletteSize = 256*4;
+			native->paletteAllocation = rwMalloc(native->paletteSize + 15,
+				MEMDUR_EVENT | ID_RASTERPSP);
+			if(native->paletteAllocation == nil)
+				return nil;
+			native->palette = (uint8*)(((uintptr)native->paletteAllocation + 15) & ~(uintptr)15);
+			memset(native->palette, 0, native->paletteSize);
+		}
 	}
 	raster->originalWidth = raster->width;
 	raster->originalHeight = raster->height;
@@ -117,8 +133,32 @@ rasterUnlock(Raster *raster, int32 level)
 	raster->privateFlags = 0;
 }
 
-uint8 *rasterLockPalette(Raster *, int32) { return nil; }
-void rasterUnlockPalette(Raster *) {}
+uint8 *
+rasterLockPalette(Raster *raster, int32 lockMode)
+{
+	PspRaster *native = GETPSPRASTEREXT(raster);
+	if(native->palette == nil || raster->palette != nil)
+		return nil;
+	native->paletteLockMode = lockMode;
+	raster->palette = native->palette;
+	raster->privateFlags |= lockMode & Raster::LOCKWRITE ?
+		Raster::PRIVATELOCK_WRITE_PALETTE : Raster::PRIVATELOCK_READ_PALETTE;
+	return raster->palette;
+}
+
+void
+rasterUnlockPalette(Raster *raster)
+{
+	PspRaster *native = GETPSPRASTEREXT(raster);
+	if(raster->palette == nil)
+		return;
+	if(native->paletteLockMode & Raster::LOCKWRITE)
+		sceKernelDcacheWritebackRange(native->palette, native->paletteSize);
+	native->paletteLockMode = 0;
+	raster->palette = nil;
+	raster->privateFlags &= ~(Raster::PRIVATELOCK_READ_PALETTE |
+		Raster::PRIVATELOCK_WRITE_PALETTE);
+}
 int32 rasterNumLevels(Raster *) { return 1; }
 
 bool32
@@ -129,8 +169,13 @@ imageFindRasterFormat(Image *image, int32 type, int32 *width, int32 *height,
 		return 0;
 	*width = image->width;
 	*height = image->height;
-	*depth = 16;
-	*format = (image->hasAlpha() ? Raster::C4444 : Raster::C565) | type;
+	if(image->depth == 8){
+		*depth = 8;
+		*format = Raster::C8888 | Raster::PAL8 | type;
+	}else{
+		*depth = 16;
+		*format = (image->hasAlpha() ? Raster::C4444 : Raster::C565) | type;
+	}
 	return 1;
 }
 
@@ -144,8 +189,27 @@ static uint16 pack4444(uint8 r, uint8 g, uint8 b, uint8 a)
 bool32
 rasterFromImage(Raster *raster, Image *image)
 {
-	if(raster->type != Raster::TEXTURE || image->depth != 32 ||
+	if(raster->type != Raster::TEXTURE ||
 	   image->width != raster->width || image->height != raster->height)
+		return 0;
+	if(raster->format & Raster::PAL8){
+		if(image->depth != 8 || image->palette == nil)
+			return 0;
+		uint8 *pixels = rasterLock(raster, 0, Raster::LOCKWRITE | Raster::LOCKNOFETCH);
+		uint8 *palette = rasterLockPalette(raster, Raster::LOCKWRITE | Raster::LOCKNOFETCH);
+		if(pixels == nil || palette == nil){
+			if(palette) rasterUnlockPalette(raster);
+			if(pixels) rasterUnlock(raster, 0);
+			return 0;
+		}
+		for(int32 y = 0; y < image->height; y++)
+			memcpy(pixels + y*raster->stride, image->pixels + y*image->stride, image->width);
+		memcpy(palette, image->palette, 256*4);
+		rasterUnlockPalette(raster);
+		rasterUnlock(raster, 0);
+		return 1;
+	}
+	if(image->depth != 32)
 		return 0;
 	uint8 *destination = rasterLock(raster, 0, Raster::LOCKWRITE | Raster::LOCKNOFETCH);
 	if(destination == nil)
@@ -179,6 +243,19 @@ rasterToImage(Raster *raster)
 	uint8 *source = rasterLock(raster, 0, Raster::LOCKREAD);
 	if(source == nil)
 		return nil;
+	if(raster->format & Raster::PAL8){
+		uint8 *palette = rasterLockPalette(raster, Raster::LOCKREAD);
+		if(palette == nil){ rasterUnlock(raster, 0); return nil; }
+		Image *image = Image::create(raster->width, raster->height, 8);
+		if(image == nil){ rasterUnlockPalette(raster); rasterUnlock(raster, 0); return nil; }
+		image->allocate();
+		for(int32 y = 0; y < raster->height; y++)
+			memcpy(image->pixels + y*image->stride, source + y*raster->stride, raster->width);
+		memcpy(image->palette, palette, 256*4);
+		rasterUnlockPalette(raster);
+		rasterUnlock(raster, 0);
+		return image;
+	}
 	Image *image = Image::create(raster->width, raster->height, 32);
 	if(image == nil){ rasterUnlock(raster, 0); return nil; }
 	image->allocate();

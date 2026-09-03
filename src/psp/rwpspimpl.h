@@ -11,10 +11,14 @@ extern int32 nativeRasterOffset;
 struct PspRaster {
 	uint8 *pixels;
 	void *allocation;
+	uint8 *palette;
+	void *paletteAllocation;
 	uint32 size;
+	uint32 paletteSize;
 	int32 pixelFormat;
 	int32 bytesPerPixel;
 	int32 lockMode;
+	int32 paletteLockMode;
 };
 #define GETPSPRASTEREXT(raster) (PLUGINOFFSET(PspRaster, raster, nativeRasterOffset))
 void registerNativeRaster(void);
