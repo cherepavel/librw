@@ -613,7 +613,9 @@ registerMatFXPlugin(void)
 {
 	Driver::registerPlugin(PLATFORM_NULL, 0, ID_MATFX,
 	                       matfxOpen, matfxClose);
+#ifndef RW_PSP
 	ps2::initMatFX();
+#endif
 	xbox::initMatFX();
 	d3d8::initMatFX();
 	d3d9::initMatFX();

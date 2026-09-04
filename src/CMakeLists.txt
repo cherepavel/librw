@@ -109,7 +109,12 @@ if(LIBRW_PLATFORM_PSP)
     # These backends are host-buildable reference code, but PSPSDK must not
     # compile or link foreign renderer implementations into the PSP library.
     set_source_files_properties(
+        ps2/pds.cpp
+        ps2/ps2.cpp
+        ps2/ps2device.cpp
+        ps2/ps2matfx.cpp
         ps2/ps2raster.cpp
+        ps2/ps2skin.cpp
         PROPERTIES HEADER_FILE_ONLY TRUE
     )
 endif()

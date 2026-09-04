@@ -120,9 +120,12 @@ readSkin(Stream *stream, int32 len, void *object, int32 offset, int32)
 
 	if(geometry->instData){
 		// TODO: function pointers
+#ifndef RW_PSP
 		if(geometry->instData->platform == PLATFORM_PS2)
 			return ps2::readNativeSkin(stream, len, object, offset);
-		else if(geometry->instData->platform == PLATFORM_WDGL)
+		else
+#endif
+		if(geometry->instData->platform == PLATFORM_WDGL)
 			return wdgl::readNativeSkin(stream, len, object, offset);
 		else if(geometry->instData->platform == PLATFORM_XBOX)
 			return xbox::readNativeSkin(stream, len, object, offset);
@@ -179,9 +182,12 @@ writeSkin(Stream *stream, int32 len, void *object, int32 offset, int32)
 	Geometry *geometry = (Geometry*)object;
 
 	if(geometry->instData){
+#ifndef RW_PSP
 		if(geometry->instData->platform == PLATFORM_PS2)
 			return ps2::writeNativeSkin(stream, len, object, offset);
-		else if(geometry->instData->platform == PLATFORM_WDGL)
+		else
+#endif
+		if(geometry->instData->platform == PLATFORM_WDGL)
 			return wdgl::writeNativeSkin(stream, len, object, offset);
 		else if(geometry->instData->platform == PLATFORM_XBOX)
 			return xbox::writeNativeSkin(stream, len, object, offset);
@@ -225,8 +231,10 @@ getSizeSkin(void *object, int32 offset, int32)
 	Geometry *geometry = (Geometry*)object;
 
 	if(geometry->instData){
+#ifndef RW_PSP
 		if(geometry->instData->platform == PLATFORM_PS2)
 			return ps2::getSizeNativeSkin(object, offset);
+#endif
 		if(geometry->instData->platform == PLATFORM_WDGL)
 			return wdgl::getSizeNativeSkin(object, offset);
 		if(geometry->instData->platform == PLATFORM_XBOX)
@@ -367,7 +375,9 @@ registerSkinPlugin(void)
 {
 	Driver::registerPlugin(PLATFORM_NULL, 0, ID_SKIN,
 	                       skinOpen, skinClose);
+#ifndef RW_PSP
 	ps2::initSkin();
+#endif
 	xbox::initSkin();
 	d3d8::initSkin();
 	d3d9::initSkin();
