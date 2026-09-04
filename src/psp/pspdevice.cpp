@@ -150,7 +150,7 @@ applyBlend(void)
 }
 
 static void
-applyTexture(void)
+applyTexture(bool32 normalizedCoordinates)
 {
 	if(state.texture == nil){
 		sceGuDisable(GU_TEXTURE_2D);
@@ -170,6 +170,13 @@ applyTexture(void)
 	sceGuTexImage(0, state.texture->originalWidth, state.texture->originalHeight,
 	    native.bufferWidth, native.pixels);
 	sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+	/* RenderWare's 3D UVs are expressed in texture units, while the GU samples
+	 * float UVs in texels. Preserve GTA's intentional wrapping by scaling each
+	 * unit by the bound raster dimensions. Im2D vertices are staged in texels
+	 * already (and GU does not apply this scale to GU_TRANSFORM_2D). */
+	sceGuTexScale(normalizedCoordinates ? state.texture->originalWidth : 1.0f,
+	    normalizedCoordinates ? state.texture->originalHeight : 1.0f);
+	sceGuTexOffset(0.0f, 0.0f);
 	sceGuTexFilter(state.filter == Texture::NEAREST ? GU_NEAREST : GU_LINEAR,
 	    state.filter == Texture::NEAREST ? GU_NEAREST : GU_LINEAR);
 	sceGuTexWrap(state.addressU == Texture::CLAMP ? GU_CLAMP : GU_REPEAT,
@@ -210,7 +217,7 @@ drawIm2D(PrimitiveType type, void *vertices, int32 numVertices,
 	GuIm2DVertex *guVertices = copyVertices(vertices, numVertices);
 	if(guVertices == nil)
 		return;
-	applyTexture();
+	applyTexture(0);
 	int32 vertexType = GU_TEXTURE_32BITF | GU_COLOR_8888 |
 	    GU_VERTEX_32BITF | GU_TRANSFORM_2D;
 	if(indices && numIndices > 0){
@@ -416,7 +423,7 @@ im3DRenderPrimitive(PrimitiveType type)
 	int32 primitive = guPrimitive(type);
 	if(primitive < 0 || im3DVertices == nil || im3DVertexCount <= 0)
 		return;
-	applyTexture();
+	applyTexture(1);
 	sceGumDrawArray(primitive, GU_TEXTURE_32BITF | GU_COLOR_8888 |
 	    GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
 	    im3DVertexCount, nil, im3DVertices);
@@ -432,7 +439,7 @@ im3DRenderIndexedPrimitive(PrimitiveType type, void *indices, int32 numIndices)
 	if(guIndices == nil)
 		return;
 	memcpy(guIndices, indices, sizeof(uint16)*numIndices);
-	applyTexture();
+	applyTexture(1);
 	sceGumDrawArray(primitive, GU_TEXTURE_32BITF | GU_COLOR_8888 |
 	    GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_INDEX_16BIT | GU_TRANSFORM_3D,
 	    numIndices, guIndices, im3DVertices);
@@ -467,7 +474,7 @@ drawGeometry(const Matrix *world, PrimitiveType type,
 	model.w.w = 1.0f;
 	sceGumMatrixMode(GU_MODEL);
 	sceGumLoadMatrix(&model);
-	applyTexture();
+	applyTexture(1);
 	sceGuDisable(GU_LIGHTING);
 	sceGumDrawArray(primitive, GU_TEXTURE_32BITF | GU_COLOR_8888 |
 	    GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_INDEX_16BIT |
