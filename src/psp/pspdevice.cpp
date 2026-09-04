@@ -2,6 +2,7 @@
 
 #include <pspdisplay.h>
 #include <pspgu.h>
+#include <pspgum.h>
 #include <psputils.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,6 +34,52 @@ static bool32 listActive;
 static bool32 clearPending;
 static uint32 pendingClearMode;
 static uint32 pendingClearColor;
+
+struct GuIm3DVertex {
+	float32 u, v;
+	uint32 color;
+	float32 nx, ny, nz;
+	float32 x, y, z;
+};
+
+static_assert(sizeof(GuIm3DVertex) == 36, "Unexpected PSP GU Im3D vertex layout");
+static GuIm3DVertex *im3DVertices;
+static int32 im3DVertexCount;
+
+static void
+updateCameraMatrices(Camera *camera)
+{
+	float32 view[16];
+	float32 projection[16];
+	Matrix inverse;
+	Matrix::invert(&inverse, camera->getFrame()->getLTM());
+	view[0] = -inverse.right.x; view[1] = inverse.right.y; view[2] = inverse.right.z; view[3] = 0.0f;
+	view[4] = -inverse.up.x; view[5] = inverse.up.y; view[6] = inverse.up.z; view[7] = 0.0f;
+	view[8] = -inverse.at.x; view[9] = inverse.at.y; view[10] = inverse.at.z; view[11] = 0.0f;
+	view[12] = -inverse.pos.x; view[13] = inverse.pos.y; view[14] = inverse.pos.z; view[15] = 1.0f;
+	memcpy(&camera->devView, view, sizeof(view));
+
+	memset(projection, 0, sizeof(projection));
+	float32 inverseWindowX = 1.0f/camera->viewWindow.x;
+	float32 inverseWindowY = 1.0f/camera->viewWindow.y;
+	float32 inverseDepth = 1.0f/(camera->farPlane-camera->nearPlane);
+	projection[0] = inverseWindowX;
+	projection[5] = inverseWindowY;
+	projection[8] = camera->viewOffset.x*inverseWindowX;
+	projection[9] = camera->viewOffset.y*inverseWindowY;
+	projection[12] = -projection[8];
+	projection[13] = -projection[9];
+	if(camera->projection == Camera::PERSPECTIVE){
+		projection[10] = (camera->farPlane+camera->nearPlane)*inverseDepth;
+		projection[11] = 1.0f;
+		projection[14] = -2.0f*camera->nearPlane*camera->farPlane*inverseDepth;
+	}else{
+		projection[10] = 2.0f*inverseDepth;
+		projection[14] = -(camera->farPlane+camera->nearPlane)*inverseDepth;
+		projection[15] = 1.0f;
+	}
+	memcpy(&camera->devProj, projection, sizeof(projection));
+}
 
 struct GuIm2DVertex {
 	float32 u, v;
@@ -178,7 +225,7 @@ drawIm2D(PrimitiveType type, void *vertices, int32 numVertices,
 }
 
 static void
-beginUpdate(Camera*)
+beginUpdate(Camera *camera)
 {
 	if(!guInitialized || listActive)
 		return;
@@ -197,6 +244,13 @@ beginUpdate(Camera*)
 		if(flags)
 			sceGuClear(flags);
 		clearPending = 0;
+	}
+	if(camera){
+		updateCameraMatrices(camera);
+		sceGumMatrixMode(GU_PROJECTION);
+		sceGumLoadMatrix(reinterpret_cast<ScePspFMatrix4 *>(&camera->devProj));
+		sceGumMatrixMode(GU_VIEW);
+		sceGumLoadMatrix(reinterpret_cast<ScePspFMatrix4 *>(&camera->devView));
 	}
 }
 
@@ -311,10 +365,86 @@ static void im2DRenderIndexedPrimitive(PrimitiveType type, void *vertices,
 {
 	drawIm2D(type, vertices, numVertices, indices, numIndices);
 }
-static void im3DTransform(void*, int32, Matrix*, uint32) { }
-static void im3DRenderPrimitive(PrimitiveType) { }
-static void im3DRenderIndexedPrimitive(PrimitiveType, void*, int32) { }
-static void im3DEnd(void) { }
+static void
+im3DTransform(void *vertices, int32 numVertices, Matrix *world, uint32 flags)
+{
+	im3DVertices = nil;
+	im3DVertexCount = 0;
+	if(vertices == nil || numVertices <= 0 || !listActive)
+		return;
+	Im3DVertex *source = static_cast<Im3DVertex *>(vertices);
+	im3DVertices = static_cast<GuIm3DVertex *>(
+	    sceGuGetMemory(sizeof(GuIm3DVertex)*numVertices));
+	if(im3DVertices == nil)
+		return;
+	for(int32 i = 0; i < numVertices; i++){
+		im3DVertices[i].u = source[i].u;
+		im3DVertices[i].v = source[i].v;
+		im3DVertices[i].color = source[i].r | source[i].g << 8 |
+		    source[i].b << 16 | source[i].a << 24;
+		im3DVertices[i].nx = source[i].normal.x;
+		im3DVertices[i].ny = source[i].normal.y;
+		im3DVertices[i].nz = source[i].normal.z;
+		im3DVertices[i].x = source[i].position.x;
+		im3DVertices[i].y = source[i].position.y;
+		im3DVertices[i].z = source[i].position.z;
+	}
+	ScePspFMatrix4 model;
+	memset(&model, 0, sizeof(model));
+	if(world){
+		model.x.x = world->right.x; model.x.y = world->right.y; model.x.z = world->right.z;
+		model.y.x = world->up.x;    model.y.y = world->up.y;    model.y.z = world->up.z;
+		model.z.x = world->at.x;    model.z.y = world->at.y;    model.z.z = world->at.z;
+		model.w.x = world->pos.x;   model.w.y = world->pos.y;   model.w.z = world->pos.z;
+	}else{
+		model.x.x = model.y.y = model.z.z = 1.0f;
+	}
+	model.w.w = 1.0f;
+	sceGumMatrixMode(GU_MODEL);
+	sceGumLoadMatrix(&model);
+	if((flags & im3d::VERTEXUV) == 0)
+		setRenderState(TEXTURERASTER, nil);
+	// Lighting state and light upload are implemented with the static geometry
+	// pipeline. Keep immediate-mode geometry deterministic and unlit for now.
+	sceGuDisable(GU_LIGHTING);
+	im3DVertexCount = numVertices;
+}
+
+static void
+im3DRenderPrimitive(PrimitiveType type)
+{
+	int32 primitive = guPrimitive(type);
+	if(primitive < 0 || im3DVertices == nil || im3DVertexCount <= 0)
+		return;
+	applyTexture();
+	sceGumDrawArray(primitive, GU_TEXTURE_32BITF | GU_COLOR_8888 |
+	    GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
+	    im3DVertexCount, nil, im3DVertices);
+}
+
+static void
+im3DRenderIndexedPrimitive(PrimitiveType type, void *indices, int32 numIndices)
+{
+	int32 primitive = guPrimitive(type);
+	if(primitive < 0 || im3DVertices == nil || indices == nil || numIndices <= 0)
+		return;
+	uint16 *guIndices = static_cast<uint16 *>(sceGuGetMemory(sizeof(uint16)*numIndices));
+	if(guIndices == nil)
+		return;
+	memcpy(guIndices, indices, sizeof(uint16)*numIndices);
+	applyTexture();
+	sceGumDrawArray(primitive, GU_TEXTURE_32BITF | GU_COLOR_8888 |
+	    GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_INDEX_16BIT | GU_TRANSFORM_3D,
+	    numIndices, guIndices, im3DVertices);
+}
+
+static void
+im3DEnd(void)
+{
+	im3DVertices = nil;
+	im3DVertexCount = 0;
+	sceGuDisable(GU_LIGHTING);
+}
 
 int
 deviceSystem(DeviceReq req, void *arg, int32 n)
