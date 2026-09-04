@@ -19,6 +19,9 @@
 #include "gl/rwwdgl.h"
 #include "gl/rwgl3.h"
 #include "gl/rwgl3plg.h"
+#ifdef RW_PSP
+#include "psp/rwpspimpl.h"
+#endif
 
 #define PLUGIN_ID ID_MATFX
 
@@ -613,7 +616,9 @@ registerMatFXPlugin(void)
 {
 	Driver::registerPlugin(PLATFORM_NULL, 0, ID_MATFX,
 	                       matfxOpen, matfxClose);
-#ifndef RW_PSP
+#ifdef RW_PSP
+	psp::initMatFX();
+#else
 	ps2::initMatFX();
 #endif
 	xbox::initMatFX();

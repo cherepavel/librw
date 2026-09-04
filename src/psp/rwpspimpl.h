@@ -46,6 +46,7 @@ bool32 rasterFromImage(Raster *raster, Image *image);
 Image *rasterToImage(Raster *raster);
 ObjPipeline *makeDefaultPipeline(void);
 ObjPipeline *makeSkinPipeline(void);
+void initMatFX(void);
 void *destroyNativeGeometry(void *object, int32 offset, int32 size);
 
 struct PspGeometryVertex {
