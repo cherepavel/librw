@@ -46,13 +46,17 @@ readNativeTexture(Stream *stream)
 	int32 compression = stream->readU8();
 	bool32 pal8 = depth == 8 &&
 		(format & (Raster::PAL4 | Raster::PAL8)) == Raster::PAL8;
-	bool32 bgra8888 = depth == 32 && (format & 0xF00) == Raster::C8888 &&
+	bool32 bgra8888 = depth == 32 &&
+		((format & 0xF00) == Raster::C8888 || (format & 0xF00) == Raster::C888) &&
 		(format & (Raster::PAL4 | Raster::PAL8)) == 0;
+	bool32 hasSourceAlpha = (format & 0xF00) == Raster::C8888;
 	bool32 argb1555 = depth == 16 && (format & 0xF00) == Raster::C1555 &&
 		(format & (Raster::PAL4 | Raster::PAL8)) == 0;
 	if(width <= 0 || height <= 0 || numLevels <= 0 ||
 	   type != Raster::TEXTURE || compression != 0 ||
 	   (!pal8 && !bgra8888 && !argb1555)){
+		printf("PSP_NATIVE_TEXTURE_UNSUPPORTED name=%s format=0x%lx size=%ldx%ld depth=%ld levels=%ld type=%ld compression=%ld\n",
+		    texture->name, format, width, height, depth, numLevels, type, compression);
 		texture->destroy();
 		return nil;
 	}
@@ -73,6 +77,8 @@ readNativeTexture(Stream *stream)
 		destinationFormat | type,
 		PLATFORM_PSP);
 	if(raster == nil){
+		printf("PSP_NATIVE_TEXTURE_RASTER_FAILED name=%s size=%ldx%ld format=0x%lx\n",
+		    texture->name, width, height, destinationFormat);
 		texture->destroy();
 		return nil;
 	}
@@ -81,6 +87,7 @@ readNativeTexture(Stream *stream)
 	if(pal8){
 		uint8 *palette = raster->lockPalette(Raster::LOCKWRITE | Raster::LOCKNOFETCH);
 		if(palette == nil || stream->read8(palette, 256*4) != 256*4){
+			printf("PSP_NATIVE_TEXTURE_PALETTE_FAILED name=%s\n", texture->name);
 			if(palette) raster->unlockPalette();
 			texture->destroy();
 			return nil;
@@ -99,6 +106,8 @@ readNativeTexture(Stream *stream)
 				Raster::LOCKWRITE | Raster::LOCKNOFETCH);
 			uint32 expected = pixels ? raster->stride*raster->height : 0;
 			if(pixels == nil || size != expected || stream->read8(pixels, size) != size){
+				printf("PSP_NATIVE_TEXTURE_LEVEL_FAILED name=%s level=%ld size=%lu expected=%lu\n",
+				    texture->name, level, size, expected);
 				if(pixels) raster->unlock(level);
 				texture->destroy();
 				return nil;
@@ -120,6 +129,8 @@ readNativeTexture(Stream *stream)
 				Raster::LOCKWRITE | Raster::LOCKNOFETCH);
 			if(source == nil || pixels == nil || size != sourceSize ||
 			   stream->read8(source, sourceSize) != sourceSize){
+				printf("PSP_NATIVE_TEXTURE_RGBA_FAILED name=%s level=%ld size=%lu expected=%lu source=%p pixels=%p\n",
+				    texture->name, level, size, sourceSize, source, pixels);
 				if(pixels) raster->unlock(level);
 				if(source) rwFree(source);
 				texture->destroy();
@@ -128,8 +139,9 @@ readNativeTexture(Stream *stream)
 			for(int32 y = 0; y < raster->height; y++)
 				for(int32 x = 0; x < raster->width; x++){
 					uint8 *bgra = source + (y*raster->width + x)*4;
+					uint16 alpha = hasSourceAlpha ? bgra[3] >> 4 : 0xF;
 					uint16 rgba = (uint16)((bgra[2] >> 4) | ((bgra[1] >> 4) << 4) |
-						((bgra[0] >> 4) << 8) | ((bgra[3] >> 4) << 12));
+						((bgra[0] >> 4) << 8) | (alpha << 12));
 					memcpy(pixels + y*raster->stride + x*2, &rgba, 2);
 				}
 			raster->unlock(level);
