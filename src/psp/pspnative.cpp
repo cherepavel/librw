@@ -48,8 +48,11 @@ readNativeTexture(Stream *stream)
 		(format & (Raster::PAL4 | Raster::PAL8)) == Raster::PAL8;
 	bool32 bgra8888 = depth == 32 && (format & 0xF00) == Raster::C8888 &&
 		(format & (Raster::PAL4 | Raster::PAL8)) == 0;
+	bool32 argb1555 = depth == 16 && (format & 0xF00) == Raster::C1555 &&
+		(format & (Raster::PAL4 | Raster::PAL8)) == 0;
 	if(width <= 0 || height <= 0 || numLevels <= 0 ||
-	   type != Raster::TEXTURE || compression != 0 || (!pal8 && !bgra8888)){
+	   type != Raster::TEXTURE || compression != 0 ||
+	   (!pal8 && !bgra8888 && !argb1555)){
 		texture->destroy();
 		return nil;
 	}
@@ -57,6 +60,8 @@ readNativeTexture(Stream *stream)
 	int32 destinationFormat;
 	if(pal8)
 		destinationFormat = (format & ~Raster::PAL4) | Raster::PAL8;
+	else if(argb1555)
+		destinationFormat = format & ~(Raster::PAL4 | Raster::PAL8);
 	else
 		destinationFormat = (format & ~(0xF00 | Raster::PAL4 | Raster::PAL8)) |
 			Raster::C4444;
@@ -89,7 +94,7 @@ readNativeTexture(Stream *stream)
 			stream->seek(size);
 			continue;
 		}
-		if(pal8){
+		if(pal8 || argb1555){
 			uint8 *pixels = raster->lock(level,
 				Raster::LOCKWRITE | Raster::LOCKNOFETCH);
 			uint32 expected = pixels ? raster->stride*raster->height : 0;
@@ -98,6 +103,15 @@ readNativeTexture(Stream *stream)
 				texture->destroy();
 				return nil;
 			}
+			if(argb1555)
+				for(uint32 offset = 0; offset < size; offset += 2){
+					uint16 source;
+					memcpy(&source, pixels + offset, 2);
+					uint16 rgba = (uint16)(((source >> 10) & 0x1F) |
+						(source & 0x03E0) | ((source & 0x1F) << 10) |
+						(source & 0x8000));
+					memcpy(pixels + offset, &rgba, 2);
+				}
 			raster->unlock(level);
 		}else{
 			uint32 sourceSize = raster->width*raster->height*4;
