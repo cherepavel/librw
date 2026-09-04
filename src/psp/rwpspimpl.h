@@ -45,6 +45,7 @@ bool32 imageFindRasterFormat(Image *image, int32 type, int32 *width,
 bool32 rasterFromImage(Raster *raster, Image *image);
 Image *rasterToImage(Raster *raster);
 ObjPipeline *makeDefaultPipeline(void);
+ObjPipeline *makeSkinPipeline(void);
 void *destroyNativeGeometry(void *object, int32 offset, int32 size);
 
 struct PspGeometryVertex {
@@ -55,6 +56,7 @@ struct PspGeometryVertex {
 };
 static_assert(sizeof(PspGeometryVertex) == 36,
 	"Unexpected PSP geometry vertex layout");
+PspGeometryVertex *allocTransientGeometryVertices(int32 count);
 
 void drawGeometry(const Matrix *world, PrimitiveType primitive,
 	const PspGeometryVertex *vertices, int32 numVertices,

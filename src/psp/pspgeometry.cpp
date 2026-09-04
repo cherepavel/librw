@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <pspkernel.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "../rwbase.h"
@@ -11,7 +12,9 @@
 #include "../rwplg.h"
 #include "../rwpipeline.h"
 #include "../rwobjects.h"
+#include "../rwanim.h"
 #include "../rwengine.h"
+#include "../rwplugins.h"
 #include "rwpspimpl.h"
 
 namespace rw {
@@ -21,6 +24,7 @@ struct PspMeshInstance {
 	uint32 indexOffset;
 	uint32 numIndices;
 	Material *material;
+	bool32 vertexAlpha;
 };
 
 struct PspGeometryInstance {
@@ -134,8 +138,15 @@ instanceGeometry(Geometry *geometry)
 		dst.indexOffset = indexOffset;
 		dst.numIndices = mesh->numIndices;
 		dst.material = mesh->material;
+		dst.vertexAlpha = 0;
 		memcpy(instance->indices + indexOffset, mesh->indices,
 		    sizeof(uint16)*mesh->numIndices);
+		if(geometry->colors)
+			for(uint32 j = 0; j < mesh->numIndices; j++)
+				if(geometry->colors[mesh->indices[j]].alpha != 255){
+					dst.vertexAlpha = 1;
+					break;
+				}
 		indexOffset += mesh->numIndices;
 	}
 	if(indexOffset != meshHeader->totalIndices){
@@ -175,6 +186,25 @@ uninstance(ObjPipeline*, Atomic *atomic)
 }
 
 static void
+renderMeshes(Atomic *atomic, PspGeometryInstance *data,
+    const PspGeometryVertex *vertices)
+{
+	Geometry *geometry = atomic->geometry;
+	PrimitiveType primitive = geometry->meshHeader->flags & MeshHeader::TRISTRIP ?
+	    PRIMTYPETRISTRIP : PRIMTYPETRILIST;
+	const Matrix *world = atomic->getFrame() ? atomic->getFrame()->getLTM() : nil;
+	for(uint32 i = 0; i < data->numMeshes; i++){
+		PspMeshInstance &mesh = data->meshes[i];
+		Texture *texture = mesh.material ? mesh.material->texture : nil;
+		SetRenderStatePtr(TEXTURERASTER, texture ? texture->raster : nil);
+		SetRenderState(VERTEXALPHA, mesh.vertexAlpha ||
+		    (mesh.material && mesh.material->color.alpha != 255));
+		drawGeometry(world, primitive, vertices, data->numVertices,
+		    data->indices + mesh.indexOffset, mesh.numIndices);
+	}
+}
+
+static void
 render(ObjPipeline *pipeline, Atomic *atomic)
 {
 	Geometry *geometry = atomic->geometry;
@@ -185,18 +215,82 @@ render(ObjPipeline *pipeline, Atomic *atomic)
 	    reinterpret_cast<PspGeometryInstance *>(geometry->instData);
 	if(data == nil || data->header.platform != PLATFORM_PSP)
 		return;
-	PrimitiveType primitive = geometry->meshHeader->flags & MeshHeader::TRISTRIP ?
-	    PRIMTYPETRISTRIP : PRIMTYPETRILIST;
-	const Matrix *world = atomic->getFrame() ? atomic->getFrame()->getLTM() : nil;
-	for(uint32 i = 0; i < data->numMeshes; i++){
-		PspMeshInstance &mesh = data->meshes[i];
-		Texture *texture = mesh.material ? mesh.material->texture : nil;
-		SetRenderStatePtr(TEXTURERASTER, texture ? texture->raster : nil);
-		SetRenderState(VERTEXALPHA,
-		    mesh.material && mesh.material->color.alpha != 255);
-		drawGeometry(world, primitive, data->vertices, data->numVertices,
-		    data->indices + mesh.indexOffset, mesh.numIndices);
+	renderMeshes(atomic, data, data->vertices);
+}
+
+static void
+renderSkin(ObjPipeline *pipeline, Atomic *atomic)
+{
+	static int32 diagnosticCount;
+	Geometry *geometry = atomic->geometry;
+	Skin *skin = geometry ? Skin::get(geometry) : nil;
+	if(geometry == nil || skin == nil)
+		return;
+	pipeline->instance(atomic);
+	PspGeometryInstance *data =
+	    reinterpret_cast<PspGeometryInstance *>(geometry->instData);
+	if(data == nil || data->header.platform != PLATFORM_PSP)
+		return;
+	if(diagnosticCount < 4){
+		printf("PSP_SKIN_RENDER vertices=%lu bones=%ld weights=%ld hierarchy=%p\n",
+		    data->numVertices, skin->numBones, skin->numWeights,
+		    Skin::getHierarchy(atomic));
+		diagnosticCount++;
 	}
+
+	PspGeometryVertex *vertices = allocTransientGeometryVertices(data->numVertices);
+	Matrix *boneMatrices = rwNewT(Matrix, skin->numBones, MEMDUR_FUNCTION | ID_SKIN);
+	if(vertices == nil || boneMatrices == nil){
+		if(boneMatrices) rwFree(boneMatrices);
+		return;
+	}
+	HAnimHierarchy *hierarchy = Skin::getHierarchy(atomic);
+	Matrix *inverse = reinterpret_cast<Matrix *>(skin->inverseMatrices);
+	if(hierarchy && hierarchy->numNodes == skin->numBones){
+		if(hierarchy->flags & HAnimHierarchy::LOCALSPACEMATRICES){
+			for(int32 i = 0; i < skin->numBones; i++){
+				inverse[i].flags = 0;
+				Matrix::mult(&boneMatrices[i], &inverse[i], &hierarchy->matrices[i]);
+			}
+		}else{
+			Matrix inverseAtomic, temporary;
+			Matrix::invert(&inverseAtomic, atomic->getFrame()->getLTM());
+			for(int32 i = 0; i < skin->numBones; i++){
+				inverse[i].flags = 0;
+				Matrix::mult(&temporary, &hierarchy->matrices[i], &inverseAtomic);
+				Matrix::mult(&boneMatrices[i], &inverse[i], &temporary);
+			}
+		}
+	}else
+		for(int32 i = 0; i < skin->numBones; i++)
+			boneMatrices[i].setIdentity();
+
+	for(uint32 i = 0; i < data->numVertices; i++){
+		vertices[i] = data->vertices[i];
+		V3d sourcePosition = { data->vertices[i].x, data->vertices[i].y, data->vertices[i].z };
+		V3d sourceNormal = { data->vertices[i].nx, data->vertices[i].ny, data->vertices[i].nz };
+		V3d position = { 0.0f, 0.0f, 0.0f };
+		V3d normal = { 0.0f, 0.0f, 0.0f };
+		for(int32 j = 0; j < skin->numWeights && j < 4; j++){
+			float32 weight = skin->weights[i*4+j];
+			uint8 bone = skin->indices[i*4+j];
+			if(weight == 0.0f || bone >= skin->numBones)
+				continue;
+			V3d p, n;
+			V3d::transformPoints(&p, &sourcePosition, 1, &boneMatrices[bone]);
+			V3d::transformVectors(&n, &sourceNormal, 1, &boneMatrices[bone]);
+			position = add(position, scale(p, weight));
+			normal = add(normal, scale(n, weight));
+		}
+		vertices[i].x = position.x;
+		vertices[i].y = position.y;
+		vertices[i].z = position.z;
+		vertices[i].nx = normal.x;
+		vertices[i].ny = normal.y;
+		vertices[i].nz = normal.z;
+	}
+	rwFree(boneMatrices);
+	renderMeshes(atomic, data, vertices);
 }
 
 ObjPipeline *
@@ -209,6 +303,21 @@ makeDefaultPipeline(void)
 	pipeline->impl.instance = instance;
 	pipeline->impl.uninstance = uninstance;
 	pipeline->impl.render = render;
+	return pipeline;
+}
+
+ObjPipeline *
+makeSkinPipeline(void)
+{
+	ObjPipeline *pipeline = ObjPipeline::create();
+	if(pipeline == nil)
+		return nil;
+	pipeline->init(PLATFORM_PSP);
+	pipeline->impl.instance = instance;
+	pipeline->impl.uninstance = uninstance;
+	pipeline->impl.render = renderSkin;
+	pipeline->pluginID = ID_SKIN;
+	pipeline->pluginData = 1;
 	return pipeline;
 }
 

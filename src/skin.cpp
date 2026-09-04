@@ -19,6 +19,7 @@
 #include "gl/rwwdgl.h"
 #include "gl/rwgl3.h"
 #include "gl/rwgl3plg.h"
+#include "psp/rwpsp.h"
 
 #define PLUGIN_ID ID_SKIN
 
@@ -383,6 +384,9 @@ registerSkinPlugin(void)
 	d3d9::initSkin();
 	wdgl::initSkin();
 	gl3::initSkin();
+#ifdef RW_PSP
+	psp::initSkin();
+#endif
 
 	int32 o;
 	o = Geometry::registerPlugin(sizeof(Skin*), ID_SKIN,

@@ -46,6 +46,15 @@ static_assert(sizeof(GuIm3DVertex) == 36, "Unexpected PSP GU Im3D vertex layout"
 static GuIm3DVertex *im3DVertices;
 static int32 im3DVertexCount;
 
+PspGeometryVertex *
+allocTransientGeometryVertices(int32 count)
+{
+	if(!listActive || count <= 0)
+		return nil;
+	return static_cast<PspGeometryVertex *>(
+	    sceGuGetMemory(sizeof(PspGeometryVertex)*count));
+}
+
 static void
 updateCameraMatrices(Camera *camera)
 {
@@ -106,6 +115,7 @@ static RenderStateCache state = {
 	0, BLENDSRCALPHA, BLENDINVSRCALPHA,
 	1, 1, 0, 0, CULLBACK, ALPHAALWAYS, 0
 };
+static Camera *activeCamera;
 
 static int32
 guPrimitive(PrimitiveType type)
@@ -150,18 +160,49 @@ applyBlend(void)
 }
 
 static void
-applyTexture(bool32 normalizedCoordinates)
+applyAlphaTest(void)
+{
+	if(state.alphaTestFunc == ALPHAALWAYS){
+		sceGuDisable(GU_ALPHA_TEST);
+		return;
+	}
+	int32 function = state.alphaTestFunc == ALPHALESS ? GU_LESS : GU_GEQUAL;
+	sceGuAlphaFunc(function, state.alphaTestRef, 0xFF);
+	sceGuEnable(GU_ALPHA_TEST);
+}
+
+static void
+applyFog(void)
+{
+	if(!listActive)
+		return;
+	if(!state.fogEnable || activeCamera == nil){
+		sceGuDisable(GU_FOG);
+		return;
+	}
+	float32 fogNear = activeCamera->fogPlane;
+	float32 fogFar = activeCamera->farPlane;
+	if(fogNear < activeCamera->nearPlane)
+		fogNear = activeCamera->nearPlane;
+	if(fogNear >= fogFar)
+		fogNear = fogFar - 0.001f;
+	sceGuFog(fogNear, fogFar, state.fogColor);
+	sceGuEnable(GU_FOG);
+}
+
+static void
+applyTexture(bool32 replace)
 {
 	if(state.texture == nil){
 		sceGuDisable(GU_TEXTURE_2D);
 		return;
 	}
+	sceGuEnable(GU_TEXTURE_2D);
 	NativeRaster native;
 	if(!getNativeRaster(state.texture, &native)){
 		sceGuDisable(GU_TEXTURE_2D);
 		return;
 	}
-	sceGuEnable(GU_TEXTURE_2D);
 	if(native.palette){
 		sceGuClutMode(GU_PSM_8888, 0, 0xFF, 0);
 		sceGuClutLoad(32, native.palette);
@@ -169,13 +210,16 @@ applyTexture(bool32 normalizedCoordinates)
 	sceGuTexMode(native.pixelFormat, 0, 0, native.swizzled);
 	sceGuTexImage(0, state.texture->originalWidth, state.texture->originalHeight,
 	    native.bufferWidth, native.pixels);
-	sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
-	/* RenderWare's 3D UVs are expressed in texture units, while the GU samples
-	 * float UVs in texels. Preserve GTA's intentional wrapping by scaling each
-	 * unit by the bound raster dimensions. Im2D vertices are staged in texels
-	 * already (and GU does not apply this scale to GU_TRANSFORM_2D). */
-	sceGuTexScale(normalizedCoordinates ? state.texture->originalWidth : 1.0f,
-	    normalizedCoordinates ? state.texture->originalHeight : 1.0f);
+	/* The full game switches resident TXD rasters many times per frame.  The GE
+	 * texture cache is not coherent with a new system-memory image/CLUT binding;
+	 * the single-texture smoke tests did not expose this. */
+	sceGuTexFlush();
+	sceGuTexMapMode(GU_TEXTURE_COORDS, 0, 0);
+	sceGuTexProjMapMode(GU_UV);
+	sceGuTexFunc(replace ? GU_TFX_REPLACE : GU_TFX_MODULATE, GU_TCC_RGBA);
+	/* PSP GU consumes the normalized UVs supplied by RenderWare here.  Im2D
+	 * expands its normalized UVs to texels in copyVertices instead. */
+	sceGuTexScale(1.0f, 1.0f);
 	sceGuTexOffset(0.0f, 0.0f);
 	sceGuTexFilter(state.filter == Texture::NEAREST ? GU_NEAREST : GU_LINEAR,
 	    state.filter == Texture::NEAREST ? GU_NEAREST : GU_LINEAR);
@@ -253,12 +297,14 @@ beginUpdate(Camera *camera)
 		clearPending = 0;
 	}
 	if(camera){
+		activeCamera = camera;
 		updateCameraMatrices(camera);
 		sceGumMatrixMode(GU_PROJECTION);
 		sceGumLoadMatrix(reinterpret_cast<ScePspFMatrix4 *>(&camera->devProj));
 		sceGumMatrixMode(GU_VIEW);
 		sceGumLoadMatrix(reinterpret_cast<ScePspFMatrix4 *>(&camera->devView));
 	}
+	applyFog();
 }
 
 static void
@@ -316,16 +362,16 @@ setRenderState(int32 renderState, void *pointer)
 		break;
 	case FOGENABLE:
 		state.fogEnable = value;
-		if(value) sceGuEnable(GU_FOG); else sceGuDisable(GU_FOG);
+		applyFog();
 		break;
-	case FOGCOLOR: state.fogColor = value; break;
+	case FOGCOLOR: state.fogColor = value; applyFog(); break;
 	case CULLMODE:
 		state.cullMode = value;
 		if(value == CULLNONE) sceGuDisable(GU_CULL_FACE);
 		else { sceGuEnable(GU_CULL_FACE); sceGuFrontFace(value == CULLBACK ? GU_CCW : GU_CW); }
 		break;
-	case ALPHATESTFUNC: state.alphaTestFunc = value; break;
-	case ALPHATESTREF: state.alphaTestRef = value; break;
+	case ALPHATESTFUNC: state.alphaTestFunc = value; applyAlphaTest(); break;
+	case ALPHATESTREF: state.alphaTestRef = value; applyAlphaTest(); break;
 	default: break;
 	}
 }
@@ -459,8 +505,8 @@ drawGeometry(const Matrix *world, PrimitiveType type,
     const uint16 *indices, int32 numIndices)
 {
 	int32 primitive = guPrimitive(type);
-	if(primitive < 0 || vertices == nil || numVertices <= 0 ||
-	   indices == nil || numIndices <= 0 || !listActive)
+	if(primitive < 0 || vertices == nil || numVertices <= 0 || !listActive ||
+	   (indices != nil && numIndices <= 0))
 		return;
 	ScePspFMatrix4 model;
 	memset(&model, 0, sizeof(model));
@@ -476,9 +522,12 @@ drawGeometry(const Matrix *world, PrimitiveType type,
 	sceGumLoadMatrix(&model);
 	applyTexture(1);
 	sceGuDisable(GU_LIGHTING);
-	sceGumDrawArray(primitive, GU_TEXTURE_32BITF | GU_COLOR_8888 |
-	    GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_INDEX_16BIT |
-	    GU_TRANSFORM_3D, numIndices, indices, vertices);
+	int32 vertexType = GU_TEXTURE_32BITF | GU_COLOR_8888 |
+	    GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_3D;
+	if(indices)
+		vertexType |= GU_INDEX_16BIT;
+	sceGumDrawArray(primitive, vertexType,
+	    indices ? numIndices : numVertices, indices, vertices);
 }
 
 int

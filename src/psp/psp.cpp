@@ -7,11 +7,36 @@
 #include "../rwplg.h"
 #include "../rwpipeline.h"
 #include "../rwobjects.h"
+#include "../rwanim.h"
 #include "../rwengine.h"
+#include "../rwplugins.h"
 #include "rwpspimpl.h"
 
 namespace rw {
 namespace psp {
+
+static void*
+skinOpen(void *object, int32, int32)
+{
+	skinGlobals.pipelines[PLATFORM_PSP] = makeSkinPipeline();
+	return object;
+}
+
+static void*
+skinClose(void *object, int32, int32)
+{
+	ObjPipeline *pipeline = skinGlobals.pipelines[PLATFORM_PSP];
+	if(pipeline && pipeline != skinGlobals.dummypipe)
+		pipeline->destroy();
+	skinGlobals.pipelines[PLATFORM_PSP] = nil;
+	return object;
+}
+
+void
+initSkin(void)
+{
+	Driver::registerPlugin(PLATFORM_PSP, 0, ID_SKIN, skinOpen, skinClose);
+}
 
 static void*
 driverOpen(void *object, int32, int32)

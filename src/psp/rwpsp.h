@@ -13,6 +13,7 @@ struct EngineOpenParams
 namespace psp {
 
 void registerPlatformPlugins(void);
+void initSkin(void);
 extern Device renderdevice;
 
 Texture *readNativeTexture(Stream *stream);
