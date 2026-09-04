@@ -74,6 +74,20 @@ Raster *
 rasterCreate(Raster *raster)
 {
 	PspRaster *native = GETPSPRASTEREXT(raster);
+	if(raster->type == Raster::CAMERA || raster->type == Raster::ZBUFFER){
+		raster->depth = 16;
+		raster->stride = raster->width*2;
+		raster->format = raster->type == Raster::CAMERA ? Raster::C565 : Raster::D16;
+		raster->flags |= Raster::DONTALLOCATE;
+		raster->originalWidth = raster->width;
+		raster->originalHeight = raster->height;
+		raster->originalStride = raster->stride;
+		raster->originalPixels = nil;
+		native->pixelFormat = raster->type == Raster::CAMERA ? GU_PSM_5650 : -1;
+		native->bytesPerPixel = 2;
+		native->numLevels = 1;
+		return raster;
+	}
 	int32 depth, pixelFormat;
 	int32 bpp = getFormatInfo(raster->format, &depth, &pixelFormat);
 	if((raster->type != Raster::NORMAL && raster->type != Raster::TEXTURE) || bpp == 0){

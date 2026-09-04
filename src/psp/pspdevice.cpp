@@ -1,5 +1,6 @@
 #ifdef RW_PSP
 
+#include <pspdisplay.h>
 #include <pspgu.h>
 #include <psputils.h>
 #include <stdio.h>
@@ -16,6 +17,22 @@
 
 namespace rw {
 namespace psp {
+
+enum {
+	BUFFER_WIDTH = 512,
+	SCREEN_WIDTH = 480,
+	SCREEN_HEIGHT = 272,
+	FRAMEBUFFER_SIZE = BUFFER_WIDTH*SCREEN_HEIGHT*2,
+	DEPTHBUFFER_OFFSET = FRAMEBUFFER_SIZE*2,
+	DISPLAY_LIST_WORDS = 64*1024
+};
+
+alignas(16) static uint32 displayList[DISPLAY_LIST_WORDS];
+static bool32 guInitialized;
+static bool32 listActive;
+static bool32 clearPending;
+static uint32 pendingClearMode;
+static uint32 pendingClearColor;
 
 struct GuIm2DVertex {
 	float32 u, v;
@@ -160,10 +177,57 @@ drawIm2D(PrimitiveType type, void *vertices, int32 numVertices,
 		sceGuDrawArray(primitive, vertexType, numVertices, nil, guVertices);
 }
 
-static void beginUpdate(Camera*) { }
-static void endUpdate(Camera*) { }
-static void clearCamera(Camera*, RGBA*, uint32) { }
-static void showRaster(Raster*, uint32) { }
+static void
+beginUpdate(Camera*)
+{
+	if(!guInitialized || listActive)
+		return;
+	sceGuStart(GU_DIRECT, displayList);
+	listActive = 1;
+	if(clearPending){
+		uint32 flags = 0;
+		if(pendingClearMode & Camera::CLEARIMAGE){
+			sceGuClearColor(pendingClearColor);
+			flags |= GU_COLOR_BUFFER_BIT;
+		}
+		if(pendingClearMode & Camera::CLEARZ){
+			sceGuClearDepth(0);
+			flags |= GU_DEPTH_BUFFER_BIT;
+		}
+		if(flags)
+			sceGuClear(flags);
+		clearPending = 0;
+	}
+}
+
+static void
+endUpdate(Camera*)
+{
+	if(!listActive)
+		return;
+	sceGuFinish();
+	sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
+	listActive = 0;
+}
+
+static void
+clearCamera(Camera*, RGBA *color, uint32 mode)
+{
+	pendingClearMode = mode;
+	pendingClearColor = color ? color->red | color->green << 8 |
+	    color->blue << 16 | color->alpha << 24 : 0;
+	clearPending = 1;
+}
+
+static void
+showRaster(Raster*, uint32 flags)
+{
+	if(listActive)
+		endUpdate(nil);
+	if(flags & Raster::FLIPWAITVSYNCH)
+		sceDisplayWaitVblankStart();
+	sceGuSwapBuffers();
+}
 static bool32 rasterRenderFast(Raster*, int32, int32) { return 0; }
 static void
 setRenderState(int32 renderState, void *pointer)
@@ -256,9 +320,41 @@ int
 deviceSystem(DeviceReq req, void *arg, int32 n)
 {
 	switch(req) {
+	case DEVICEOPEN: {
+		EngineOpenParams *params = static_cast<EngineOpenParams *>(arg);
+		return params != nil && params->width == SCREEN_WIDTH &&
+		    params->height == SCREEN_HEIGHT;
+	}
 	case DEVICEINIT:
+		sceGuInit();
+		sceGuStart(GU_DIRECT, displayList);
+		sceGuDrawBuffer(GU_PSM_5650, reinterpret_cast<void *>(0), BUFFER_WIDTH);
+		sceGuDispBuffer(SCREEN_WIDTH, SCREEN_HEIGHT,
+		    reinterpret_cast<void *>(FRAMEBUFFER_SIZE), BUFFER_WIDTH);
+		sceGuDepthBuffer(reinterpret_cast<void *>(DEPTHBUFFER_OFFSET), BUFFER_WIDTH);
+		sceGuOffset(2048 - SCREEN_WIDTH/2, 2048 - SCREEN_HEIGHT/2);
+		sceGuViewport(2048, 2048, SCREEN_WIDTH, SCREEN_HEIGHT);
+		sceGuDepthRange(65535, 0);
+		sceGuScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+		sceGuEnable(GU_SCISSOR_TEST);
+		sceGuDepthFunc(GU_GEQUAL);
+		sceGuShadeModel(GU_SMOOTH);
+		applyBlend();
+		sceGuFinish();
+		sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
+		sceDisplayWaitVblankStart();
+		sceGuDisplay(GU_TRUE);
+		guInitialized = 1;
+		listActive = 0;
+		clearPending = 0;
+		return 1;
 	case DEVICETERM:
-	case DEVICEOPEN:
+		if(listActive)
+			endUpdate(nil);
+		sceGuDisplay(GU_FALSE);
+		sceGuTerm();
+		guInitialized = 0;
+		return 1;
 	case DEVICECLOSE:
 	case DEVICEFINALIZE:
 		return 1;
