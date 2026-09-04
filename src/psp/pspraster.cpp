@@ -74,6 +74,15 @@ Raster *
 rasterCreate(Raster *raster)
 {
 	PspRaster *native = GETPSPRASTEREXT(raster);
+	if(raster->width == 0 && raster->height == 0 &&
+	   (raster->flags & Raster::DONTALLOCATE)){
+		raster->originalWidth = 0;
+		raster->originalHeight = 0;
+		raster->originalStride = 0;
+		raster->originalPixels = nil;
+		native->numLevels = 1;
+		return raster;
+	}
 	if(raster->type == Raster::CAMERA || raster->type == Raster::ZBUFFER){
 		raster->depth = 16;
 		raster->stride = raster->width*2;

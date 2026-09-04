@@ -44,6 +44,21 @@ bool32 imageFindRasterFormat(Image *image, int32 type, int32 *width,
 	int32 *height, int32 *depth, int32 *format);
 bool32 rasterFromImage(Raster *raster, Image *image);
 Image *rasterToImage(Raster *raster);
+ObjPipeline *makeDefaultPipeline(void);
+void *destroyNativeGeometry(void *object, int32 offset, int32 size);
+
+struct PspGeometryVertex {
+	float32 u, v;
+	uint32 color;
+	float32 nx, ny, nz;
+	float32 x, y, z;
+};
+static_assert(sizeof(PspGeometryVertex) == 36,
+	"Unexpected PSP geometry vertex layout");
+
+void drawGeometry(const Matrix *world, PrimitiveType primitive,
+	const PspGeometryVertex *vertices, int32 numVertices,
+	const uint16 *indices, int32 numIndices);
 
 } // namespace psp
 } // namespace rw

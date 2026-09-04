@@ -446,6 +446,34 @@ im3DEnd(void)
 	sceGuDisable(GU_LIGHTING);
 }
 
+void
+drawGeometry(const Matrix *world, PrimitiveType type,
+    const PspGeometryVertex *vertices, int32 numVertices,
+    const uint16 *indices, int32 numIndices)
+{
+	int32 primitive = guPrimitive(type);
+	if(primitive < 0 || vertices == nil || numVertices <= 0 ||
+	   indices == nil || numIndices <= 0 || !listActive)
+		return;
+	ScePspFMatrix4 model;
+	memset(&model, 0, sizeof(model));
+	if(world){
+		model.x.x = world->right.x; model.x.y = world->right.y; model.x.z = world->right.z;
+		model.y.x = world->up.x;    model.y.y = world->up.y;    model.y.z = world->up.z;
+		model.z.x = world->at.x;    model.z.y = world->at.y;    model.z.z = world->at.z;
+		model.w.x = world->pos.x;   model.w.y = world->pos.y;   model.w.z = world->pos.z;
+	}else
+		model.x.x = model.y.y = model.z.z = 1.0f;
+	model.w.w = 1.0f;
+	sceGumMatrixMode(GU_MODEL);
+	sceGumLoadMatrix(&model);
+	applyTexture();
+	sceGuDisable(GU_LIGHTING);
+	sceGumDrawArray(primitive, GU_TEXTURE_32BITF | GU_COLOR_8888 |
+	    GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_INDEX_16BIT |
+	    GU_TRANSFORM_3D, numIndices, indices, vertices);
+}
+
 int
 deviceSystem(DeviceReq req, void *arg, int32 n)
 {

@@ -18,6 +18,9 @@
 #include "d3d/rwd3d9.h"
 #include "gl/rwwdgl.h"
 #include "gl/rwgl3.h"
+#ifdef RW_PSP
+#include "psp/rwpspimpl.h"
+#endif
 
 #define PLUGIN_ID 2
 
@@ -240,8 +243,7 @@ destroyNativeData(void *object, int32 offset, int32 size)
 	if(geometry->instData == nil)
 		return object;
 #ifdef RW_PSP
-	// No PSP-native geometry is created until the static geometry slice lands.
-	return object;
+	return psp::destroyNativeGeometry(object, offset, size);
 #else
 	if(geometry->instData->platform == PLATFORM_PS2)
 		return ps2::destroyNativeData(object, offset, size);

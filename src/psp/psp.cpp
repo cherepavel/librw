@@ -18,6 +18,7 @@ driverOpen(void *object, int32, int32)
 {
 	assert(engine->driver[PLATFORM_PSP] != nil);
 	Driver *driver = engine->driver[PLATFORM_PSP];
+	driver->defaultPipeline = makeDefaultPipeline();
 	driver->rasterNativeOffset = nativeRasterOffset;
 	driver->rasterCreate = rasterCreate;
 	driver->rasterLock = rasterLock;
@@ -34,6 +35,11 @@ driverOpen(void *object, int32, int32)
 static void*
 driverClose(void *object, int32, int32)
 {
+	Driver *driver = engine->driver[PLATFORM_PSP];
+	if(driver->defaultPipeline && driver->defaultPipeline != engine->dummyDefaultPipeline){
+		driver->defaultPipeline->destroy();
+		driver->defaultPipeline = engine->dummyDefaultPipeline;
+	}
 	return object;
 }
 
