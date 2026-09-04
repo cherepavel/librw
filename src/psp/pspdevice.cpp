@@ -25,10 +25,18 @@ enum {
 	SCREEN_HEIGHT = 272,
 	FRAMEBUFFER_SIZE = BUFFER_WIDTH*SCREEN_HEIGHT*2,
 	DEPTHBUFFER_OFFSET = FRAMEBUFFER_SIZE*2,
-	DISPLAY_LIST_WORDS = 64*1024
+	// 256 KiB was too small for a full GTA III city frame (hundreds of
+	// atomics × per-draw state commands + transient vertex data).
+	// OpenLara uses 1 MiB for a comparable scene density; use two 512 KiB
+	// buffers so the GE can execute the previous frame's list while the CPU
+	// builds the next one (standard PSP double-buffered DL pattern).
+	DISPLAY_LIST_WORDS = 128*1024
 };
 
-alignas(16) static uint32 displayList[DISPLAY_LIST_WORDS];
+// Two display-list buffers, alternated each frame so the GE can drain
+// the previous list while the CPU fills the next one.
+alignas(16) static uint32 displayList[2][DISPLAY_LIST_WORDS];
+static int32 displayListIndex; // 0 or 1, toggled in endUpdate
 static bool32 guInitialized;
 static bool32 listActive;
 static bool32 clearPending;
@@ -280,7 +288,10 @@ beginUpdate(Camera *camera)
 {
 	if(!guInitialized || listActive)
 		return;
-	sceGuStart(GU_DIRECT, displayList);
+	// Alternate between the two display-list buffers each frame.
+	// The previous frame's buffer is safe to reuse: sceGuSync in the last
+	// endUpdate guarantees the GE has finished consuming it.
+	sceGuStart(GU_DIRECT, displayList[displayListIndex]);
 	listActive = 1;
 	if(clearPending){
 		uint32 flags = 0;
@@ -312,9 +323,30 @@ endUpdate(Camera*)
 {
 	if(!listActive)
 		return;
+#ifdef PSP_DL_STATS
+	// Report display-list usage once every 60 frames so overflows are
+	// visible in the PPSSPP log without flooding it every frame.
+	// sceGuCheckList() returns the number of words written into the
+	// current display list since the last sceGuStart.
+	{
+		static int32 s_dlFrameCount = 0;
+		if(++s_dlFrameCount >= 60){
+			s_dlFrameCount = 0;
+			int32 wordsUsed = sceGuCheckList();
+			int32 bytesFree = (int32)((DISPLAY_LIST_WORDS - (uint32)wordsUsed) * sizeof(uint32));
+			printf("PSP_DL_STATS buf=%d used=%d/%d words (%d KiB free)\n",
+			    displayListIndex, wordsUsed, DISPLAY_LIST_WORDS, bytesFree / 1024);
+			if(wordsUsed >= (int32)DISPLAY_LIST_WORDS)
+				printf("PSP_DL_OVERFLOW buf=%d words=%d\n",
+				    displayListIndex, wordsUsed);
+		}
+	}
+#endif
 	sceGuFinish();
 	sceGuSync(GU_SYNC_FINISH, GU_SYNC_WHAT_DONE);
 	listActive = 0;
+	// Switch to the other buffer for the next frame.
+	displayListIndex ^= 1;
 }
 
 static void
@@ -541,7 +573,8 @@ deviceSystem(DeviceReq req, void *arg, int32 n)
 	}
 	case DEVICEINIT:
 		sceGuInit();
-		sceGuStart(GU_DIRECT, displayList);
+		displayListIndex = 0;
+		sceGuStart(GU_DIRECT, displayList[0]);
 		sceGuDrawBuffer(GU_PSM_5650, reinterpret_cast<void *>(0), BUFFER_WIDTH);
 		sceGuDispBuffer(SCREEN_WIDTH, SCREEN_HEIGHT,
 		    reinterpret_cast<void *>(FRAMEBUFFER_SIZE), BUFFER_WIDTH);

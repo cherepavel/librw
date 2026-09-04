@@ -226,6 +226,10 @@ renderSkin(ObjPipeline *pipeline, Atomic *atomic)
 	Skin *skin = geometry ? Skin::get(geometry) : nil;
 	if(geometry == nil || skin == nil)
 		return;
+	// Guard against OOM skin allocation (Skin::init sets these to nil
+	// when the data buffer is too small or allocation failed).
+	if(skin->inverseMatrices == nil || skin->indices == nil || skin->weights == nil)
+		return;
 	pipeline->instance(atomic);
 	PspGeometryInstance *data =
 	    reinterpret_cast<PspGeometryInstance *>(geometry->instData);

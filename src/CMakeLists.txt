@@ -129,6 +129,9 @@ target_compile_definitions(librw
     PRIVATE
         LODEPNG_NO_COMPILE_CPP
         "$<IF:$<CONFIG:DEBUG>,DEBUG,NDEBUG>"
+        # Log display-list usage every 60 frames on PSP so overflows are
+        # visible in the PPSSPP log.  Remove when the budget is stable.
+        "$<$<BOOL:${LIBRW_PLATFORM_PSP}>:PSP_DL_STATS>"
     PUBLIC
         "RW_${LIBRW_PLATFORM}"
 )

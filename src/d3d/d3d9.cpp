@@ -392,6 +392,11 @@ instanceMesh(rw::ObjPipeline *rwpipe, Geometry *geo)
 static void
 instance(rw::ObjPipeline *rwpipe, Atomic *atomic)
 {
+#ifdef RW_PSP
+	// D3D9 instance must not run on PSP.
+	printf("PSP_D3D9_INSTANCE_BLOCKED\n");
+	return;
+#endif
 	ObjPipeline *pipe = (ObjPipeline*)rwpipe;
 	Geometry *geo = atomic->geometry;
 	// don't try to (re)instance native data
@@ -421,6 +426,17 @@ instance(rw::ObjPipeline *rwpipe, Atomic *atomic)
 static void
 uninstance(rw::ObjPipeline *rwpipe, Atomic *atomic)
 {
+#ifdef RW_PSP
+	// The D3D9 uninstance path must never run on PSP: there is no D3D9
+	// native data and defaultUninstanceCB would dereference a null
+	// vertexDeclaration.  Log the unexpected call and bail out safely.
+	printf("PSP_D3D9_UNINSTANCE_BLOCKED platform=%d native=%d\n",
+	    atomic->geometry && atomic->geometry->instData
+	        ? (int)atomic->geometry->instData->platform : -1,
+	    atomic->geometry
+	        ? (int)!!(atomic->geometry->flags & Geometry::NATIVE) : -1);
+	return;
+#endif
 	ObjPipeline *pipe = (ObjPipeline*)rwpipe;
 	Geometry *geo = atomic->geometry;
 	if((geo->flags & Geometry::NATIVE) == 0)
@@ -455,6 +471,11 @@ uninstance(rw::ObjPipeline *rwpipe, Atomic *atomic)
 static void
 render(rw::ObjPipeline *rwpipe, Atomic *atomic)
 {
+#ifdef RW_PSP
+	// D3D9 render must not run on PSP — it has no D3D9 native data.
+	printf("PSP_D3D9_RENDER_BLOCKED\n");
+	return;
+#endif
 	ObjPipeline *pipe = (ObjPipeline*)rwpipe;
 	Geometry *geo = atomic->geometry;
 	pipe->instance(atomic);
