@@ -148,6 +148,36 @@ static RenderStateCache state = {
 };
 static Camera *activeCamera;
 
+/* PSP GE loses visible subpixel precision when animated child transforms are
+ * submitted as separate model and view matrices.  Small idle motions then
+ * quantize into PS1-like vertex jitter even though the object root moves
+ * smoothly.  Compose world*view on the CPU so the GE transforms camera-local
+ * coordinates in one matrix stage. */
+static void
+loadModelView(const Matrix *world)
+{
+	RawMatrix worldRaw;
+	RawMatrix modelView;
+	if(world)
+		convMatrix(&worldRaw, const_cast<Matrix *>(world));
+	else{
+		memset(&worldRaw, 0, sizeof(worldRaw));
+		worldRaw.right.x = worldRaw.up.y = worldRaw.at.z = worldRaw.posw = 1.0f;
+	}
+	if(activeCamera)
+		RawMatrix::mult(&modelView, &worldRaw, &activeCamera->devView);
+	else
+		modelView = worldRaw;
+
+	ScePspFMatrix4 identity;
+	memset(&identity, 0, sizeof(identity));
+	identity.x.x = identity.y.y = identity.z.z = identity.w.w = 1.0f;
+	sceGumMatrixMode(GU_VIEW);
+	sceGumLoadMatrix(&identity);
+	sceGumMatrixMode(GU_MODEL);
+	sceGumLoadMatrix(reinterpret_cast<ScePspFMatrix4 *>(&modelView));
+}
+
 static void
 applyBlendEnable(void)
 {
@@ -522,19 +552,7 @@ im3DTransform(void *vertices, int32 numVertices, Matrix *world, uint32 flags)
 		im3DVertices[i].z = source[i].position.z;
 	}
 	sceKernelDcacheWritebackRange(im3DVertices, sizeof(GuIm3DVertex)*numVertices);
-	ScePspFMatrix4 model;
-	memset(&model, 0, sizeof(model));
-	if(world){
-		model.x.x = world->right.x; model.x.y = world->right.y; model.x.z = world->right.z;
-		model.y.x = world->up.x;    model.y.y = world->up.y;    model.y.z = world->up.z;
-		model.z.x = world->at.x;    model.z.y = world->at.y;    model.z.z = world->at.z;
-		model.w.x = world->pos.x;   model.w.y = world->pos.y;   model.w.z = world->pos.z;
-	}else{
-		model.x.x = model.y.y = model.z.z = 1.0f;
-	}
-	model.w.w = 1.0f;
-	sceGumMatrixMode(GU_MODEL);
-	sceGumLoadMatrix(&model);
+	loadModelView(world);
 	if((flags & im3d::VERTEXUV) == 0)
 		setRenderState(TEXTURERASTER, nil);
 	// Lighting state and light upload are implemented with the static geometry
@@ -591,18 +609,7 @@ drawGeometry(const Matrix *world, PrimitiveType type,
 	if(primitive < 0 || vertices == nil || numVertices <= 0 || !listActive ||
 	   (indices != nil && numIndices <= 0))
 		return;
-	ScePspFMatrix4 model;
-	memset(&model, 0, sizeof(model));
-	if(world){
-		model.x.x = world->right.x; model.x.y = world->right.y; model.x.z = world->right.z;
-		model.y.x = world->up.x;    model.y.y = world->up.y;    model.y.z = world->up.z;
-		model.z.x = world->at.x;    model.z.y = world->at.y;    model.z.z = world->at.z;
-		model.w.x = world->pos.x;   model.w.y = world->pos.y;   model.w.z = world->pos.z;
-	}else
-		model.x.x = model.y.y = model.z.z = 1.0f;
-	model.w.w = 1.0f;
-	sceGumMatrixMode(GU_MODEL);
-	sceGumLoadMatrix(&model);
+	loadModelView(world);
 	// Static geometry contains RenderWare prelight colours.  Modulation keeps
 	// those colours instead of replacing them with the raw texture sample.
 	applyTexture(0);
