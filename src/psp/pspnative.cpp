@@ -16,6 +16,14 @@
 namespace rw {
 namespace psp {
 
+enum { GU_MAX_TEXTURE_SIZE = 512 };
+
+static int32
+clampTextureDimension(int32 dimension)
+{
+	return dimension > GU_MAX_TEXTURE_SIZE ? GU_MAX_TEXTURE_SIZE : dimension;
+}
+
 Texture*
 readNativeTexture(Stream *stream)
 {
@@ -73,7 +81,12 @@ readNativeTexture(Stream *stream)
 		destinationFormat |= Raster::MIPMAP;
 	else
 		destinationFormat &= ~Raster::MIPMAP;
-	Raster *raster = Raster::create(width, height, pal8 ? 8 : 16,
+	int32 rasterWidth = clampTextureDimension(width);
+	int32 rasterHeight = clampTextureDimension(height);
+	if(rasterWidth != width || rasterHeight != height)
+		printf("PSP_NATIVE_TEXTURE_DOWNSCALE name=%s source=%ldx%ld destination=%ldx%ld\n",
+		    texture->name, width, height, rasterWidth, rasterHeight);
+	Raster *raster = Raster::create(rasterWidth, rasterHeight, pal8 ? 8 : 16,
 		destinationFormat | type,
 		PLATFORM_PSP);
 	if(raster == nil){
@@ -97,6 +110,10 @@ readNativeTexture(Stream *stream)
 
 	for(int32 level = 0; level < numLevels; level++){
 		uint32 size = stream->readU32();
+		int32 sourceWidth = width >> level;
+		int32 sourceHeight = height >> level;
+		if(sourceWidth < 1) sourceWidth = 1;
+		if(sourceHeight < 1) sourceHeight = 1;
 		if(level >= raster->getNumLevels()){
 			stream->seek(size);
 			continue;
@@ -104,16 +121,35 @@ readNativeTexture(Stream *stream)
 		if(pal8 || argb1555){
 			uint8 *pixels = raster->lock(level,
 				Raster::LOCKWRITE | Raster::LOCKNOFETCH);
-			uint32 expected = pixels ? raster->stride*raster->height : 0;
-			if(pixels == nil || size != expected || stream->read8(pixels, size) != size){
+			uint32 bytesPerPixel = pal8 ? 1 : 2;
+			uint32 sourceSize = sourceWidth*sourceHeight*bytesPerPixel;
+			bool32 resize = pixels &&
+				(sourceWidth != raster->width || sourceHeight != raster->height);
+			uint8 *source = resize ? (uint8*)rwMalloc(sourceSize,
+				MEMDUR_FUNCTION | ID_RASTERPSP) : pixels;
+			if(pixels == nil || source == nil || size != sourceSize ||
+			   stream->read8(source, sourceSize) != sourceSize){
 				printf("PSP_NATIVE_TEXTURE_LEVEL_FAILED name=%s level=%ld size=%lu expected=%lu\n",
-				    texture->name, level, size, expected);
+				    texture->name, level, size, sourceSize);
+				if(resize && source) rwFree(source);
 				if(pixels) raster->unlock(level);
 				texture->destroy();
 				return nil;
 			}
+			if(resize){
+				for(int32 y = 0; y < raster->height; y++){
+					int32 sourceY = y*sourceHeight/raster->height;
+					for(int32 x = 0; x < raster->width; x++){
+						int32 sourceX = x*sourceWidth/raster->width;
+						memcpy(pixels + y*raster->stride + x*bytesPerPixel,
+						    source + (sourceY*sourceWidth + sourceX)*bytesPerPixel,
+						    bytesPerPixel);
+					}
+				}
+				rwFree(source);
+			}
 			if(argb1555)
-				for(uint32 offset = 0; offset < size; offset += 2){
+				for(uint32 offset = 0; offset < (uint32)raster->stride*raster->height; offset += 2){
 					uint16 source;
 					memcpy(&source, pixels + offset, 2);
 					uint16 rgba = (uint16)(((source >> 10) & 0x1F) |
@@ -123,7 +159,7 @@ readNativeTexture(Stream *stream)
 				}
 			raster->unlock(level);
 		}else{
-			uint32 sourceSize = raster->width*raster->height*4;
+			uint32 sourceSize = sourceWidth*sourceHeight*4;
 			uint8 *source = (uint8*)rwMalloc(sourceSize, MEMDUR_FUNCTION | ID_RASTERPSP);
 			uint8 *pixels = raster->lock(level,
 				Raster::LOCKWRITE | Raster::LOCKNOFETCH);
@@ -138,7 +174,9 @@ readNativeTexture(Stream *stream)
 			}
 			for(int32 y = 0; y < raster->height; y++)
 				for(int32 x = 0; x < raster->width; x++){
-					uint8 *bgra = source + (y*raster->width + x)*4;
+					int32 sourceX = x*sourceWidth/raster->width;
+					int32 sourceY = y*sourceHeight/raster->height;
+					uint8 *bgra = source + (sourceY*sourceWidth + sourceX)*4;
 					uint16 alpha = hasSourceAlpha ? bgra[3] >> 4 : 0xF;
 					uint16 rgba = (uint16)((bgra[2] >> 4) | ((bgra[1] >> 4) << 4) |
 						((bgra[0] >> 4) << 8) | (alpha << 12));
