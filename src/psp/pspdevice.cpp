@@ -133,7 +133,7 @@ struct RenderStateCache {
 	Raster *texture;
 	uint32 addressU, addressV;
 	uint32 filter;
-	uint32 vertexAlpha;
+	uint32 vertexAlpha, textureAlpha;
 	uint32 srcBlend, dstBlend;
 	uint32 zTest, zWrite;
 	uint32 fogEnable, fogColor;
@@ -143,7 +143,7 @@ struct RenderStateCache {
 
 static RenderStateCache state = {
 	nil, Texture::WRAP, Texture::WRAP, Texture::LINEAR,
-	0, BLENDSRCALPHA, BLENDINVSRCALPHA,
+	0, 0, BLENDSRCALPHA, BLENDINVSRCALPHA,
 	1, 1, 0, 0, CULLBACK, ALPHAALWAYS, 0
 };
 static Camera *activeCamera;
@@ -153,7 +153,7 @@ applyBlendEnable(void)
 {
 	if(!listActive)
 		return;
-	if(state.vertexAlpha)
+	if(state.vertexAlpha || state.textureAlpha)
 		sceGuEnable(GU_BLEND);
 	else
 		sceGuDisable(GU_BLEND);
@@ -414,6 +414,12 @@ setRenderState(int32 renderState, void *pointer)
 	switch(renderState){
 	case TEXTURERASTER:
 		state.texture = static_cast<Raster *>(pointer);
+		/* Texture alpha participates in RenderWare's alpha-blend enable just
+		 * like vertex/material alpha.  Without this, transparent texels in
+		 * foliage, fences and baked-shadow cards are drawn as opaque black. */
+		state.textureAlpha = state.texture &&
+		    Raster::formatHasAlpha(state.texture->format);
+		applyBlendEnable();
 		break;
 	case TEXTUREADDRESS: state.addressU = state.addressV = value; break;
 	case TEXTUREADDRESSU: state.addressU = value; break;
