@@ -195,12 +195,44 @@ renderMeshes(Atomic *atomic, PspGeometryInstance *data,
 	const Matrix *world = atomic->getFrame() ? atomic->getFrame()->getLTM() : nil;
 	for(uint32 i = 0; i < data->numMeshes; i++){
 		PspMeshInstance &mesh = data->meshes[i];
-		Texture *texture = mesh.material ? mesh.material->texture : nil;
+		Material *material = mesh.material;
+		Texture *texture = material ? material->texture : nil;
 		SetRenderStatePtr(TEXTURERASTER, texture ? texture->raster : nil);
 		SetRenderState(VERTEXALPHA, mesh.vertexAlpha ||
-		    (mesh.material && mesh.material->color.alpha != 255));
-		drawGeometry(world, primitive, vertices, data->numVertices,
-		    data->indices + mesh.indexOffset, mesh.numIndices);
+		    (material && material->color.alpha != 255));
+
+		/* RenderWare multiplies prelight/vertex colour by material colour when
+		 * rpGEOMETRYMODULATEMATERIALCOLOR is set.  GU has no separate texture
+		 * stage constant for that multiplication, so expand only genuinely
+		 * tinted meshes into transient vertices.  Vehicle paint and glass are
+		 * changed at render time, which rules out baking this into the shared
+		 * persistent geometry. */
+		RGBA materialColor = makeRGBA(255, 255, 255, 255);
+		if(material && geometry->flags & Geometry::MODULATE)
+			materialColor = material->color;
+		if(materialColor.red != 255 || materialColor.green != 255 ||
+		   materialColor.blue != 255 || materialColor.alpha != 255){
+			PspGeometryVertex *modulated =
+			    allocTransientGeometryVertices(mesh.numIndices);
+			if(modulated){
+				for(uint32 j = 0; j < mesh.numIndices; j++){
+					modulated[j] = vertices[data->indices[mesh.indexOffset + j]];
+					uint32 color = modulated[j].color;
+					uint32 red = (color & 0xFF)*materialColor.red/255;
+					uint32 green = ((color >> 8) & 0xFF)*materialColor.green/255;
+					uint32 blue = ((color >> 16) & 0xFF)*materialColor.blue/255;
+					uint32 alpha = ((color >> 24) & 0xFF)*materialColor.alpha/255;
+					modulated[j].color = red | green << 8 | blue << 16 | alpha << 24;
+				}
+				sceKernelDcacheWritebackRange(modulated,
+				    sizeof(PspGeometryVertex)*mesh.numIndices);
+				drawGeometry(world, primitive, modulated, mesh.numIndices, nil, 0);
+			}else
+				drawGeometry(world, primitive, vertices, data->numVertices,
+				    data->indices + mesh.indexOffset, mesh.numIndices);
+		}else
+			drawGeometry(world, primitive, vertices, data->numVertices,
+			    data->indices + mesh.indexOffset, mesh.numIndices);
 	}
 }
 
@@ -294,6 +326,8 @@ renderSkin(ObjPipeline *pipeline, Atomic *atomic)
 		vertices[i].nz = normal.z;
 	}
 	rwFree(boneMatrices);
+	sceKernelDcacheWritebackRange(vertices,
+	    sizeof(PspGeometryVertex)*data->numVertices);
 	renderMeshes(atomic, data, vertices);
 }
 
