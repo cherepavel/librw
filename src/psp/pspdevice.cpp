@@ -25,23 +25,44 @@ enum {
 	SCREEN_HEIGHT = 272,
 	FRAMEBUFFER_SIZE = BUFFER_WIDTH*SCREEN_HEIGHT*2,
 	DEPTHBUFFER_OFFSET = FRAMEBUFFER_SIZE*2,
-	// 256 KiB was too small for a full GTA III city frame (hundreds of
-	// atomics × per-draw state commands + transient vertex data).
-	// OpenLara uses 1 MiB for a comparable scene density; use two 512 KiB
-	// buffers so the GE can execute the previous frame's list while the CPU
-	// builds the next one (standard PSP double-buffered DL pattern).
-	DISPLAY_LIST_WORDS = 128*1024
+	// A full GTA III city frame plus transient material-colour vertices peaks
+	// above 512 KiB (about 587 KiB in the first measured gameplay frame).
+	// Keep bounded headroom with two 768 KiB buffers.  They are alternated so
+	// the GE can execute one while the CPU fills the other.
+	DISPLAY_LIST_WORDS = 192*1024
 };
 
-// Two display-list buffers, alternated each frame so the GE can drain
-// the previous list while the CPU fills the next one.
+enum { TRANSIENT_VERTEX_BYTES = 1024*1024 };
+
+// Two display-list buffers (1.5 MiB total), alternated each frame so the GE
+// can drain the previous list while the CPU fills the next one.
 alignas(16) static uint32 displayList[2][DISPLAY_LIST_WORDS];
+alignas(16) static uint8 transientVertices[2][TRANSIENT_VERTEX_BYTES];
+static uint32 transientVertexOffset;
 static int32 displayListIndex; // 0 or 1, toggled in endUpdate
 static bool32 guInitialized;
 static bool32 listActive;
 static bool32 clearPending;
 static uint32 pendingClearMode;
 static uint32 pendingClearColor;
+
+static void *
+allocTransientBytes(uint32 bytes)
+{
+	uint32 offset = (transientVertexOffset + 15) & ~15U;
+	if(offset > TRANSIENT_VERTEX_BYTES || bytes > TRANSIENT_VERTEX_BYTES - offset){
+		static bool32 reported;
+		if(!reported){
+			printf("PSP_TRANSIENT_VERTEX_OVERFLOW used=%lu request=%lu capacity=%d\n",
+			    transientVertexOffset, bytes, TRANSIENT_VERTEX_BYTES);
+			reported = 1;
+		}
+		return nil;
+	}
+	void *memory = transientVertices[displayListIndex] + offset;
+	transientVertexOffset = offset + bytes;
+	return memory;
+}
 
 struct GuIm3DVertex {
 	float32 u, v;
@@ -59,8 +80,10 @@ allocTransientGeometryVertices(int32 count)
 {
 	if(!listActive || count <= 0)
 		return nil;
-	return static_cast<PspGeometryVertex *>(
-	    sceGuGetMemory(sizeof(PspGeometryVertex)*count));
+	uint32 bytes = sizeof(PspGeometryVertex)*count;
+	if(bytes/sizeof(PspGeometryVertex) != static_cast<uint32>(count))
+		return nil;
+	return static_cast<PspGeometryVertex *>(allocTransientBytes(bytes));
 }
 
 static void
@@ -110,7 +133,7 @@ struct RenderStateCache {
 	Raster *texture;
 	uint32 addressU, addressV;
 	uint32 filter;
-	uint32 vertexAlpha;
+	uint32 vertexAlpha, textureAlpha;
 	uint32 srcBlend, dstBlend;
 	uint32 zTest, zWrite;
 	uint32 fogEnable, fogColor;
@@ -120,10 +143,21 @@ struct RenderStateCache {
 
 static RenderStateCache state = {
 	nil, Texture::WRAP, Texture::WRAP, Texture::LINEAR,
-	0, BLENDSRCALPHA, BLENDINVSRCALPHA,
+	0, 0, BLENDSRCALPHA, BLENDINVSRCALPHA,
 	1, 1, 0, 0, CULLBACK, ALPHAALWAYS, 0
 };
 static Camera *activeCamera;
+
+static void
+applyBlendEnable(void)
+{
+	if(!listActive)
+		return;
+	if(state.vertexAlpha || state.textureAlpha)
+		sceGuEnable(GU_BLEND);
+	else
+		sceGuDisable(GU_BLEND);
+}
 
 static int32
 guPrimitive(PrimitiveType type)
@@ -242,7 +276,7 @@ copyVertices(void *vertices, int32 count)
 		return nil;
 	Im2DVertex *source = static_cast<Im2DVertex *>(vertices);
 	GuIm2DVertex *destination = static_cast<GuIm2DVertex *>(
-	    sceGuGetMemory(sizeof(GuIm2DVertex)*count));
+	    allocTransientBytes(sizeof(GuIm2DVertex)*count));
 	if(destination == nil)
 		return nil;
 	float32 uScale = state.texture ? state.texture->originalWidth : 1.0f;
@@ -256,6 +290,7 @@ copyVertices(void *vertices, int32 count)
 		destination[i].y = source[i].y;
 		destination[i].z = source[i].z;
 	}
+	sceKernelDcacheWritebackRange(destination, sizeof(GuIm2DVertex)*count);
 	return destination;
 }
 
@@ -273,10 +308,11 @@ drawIm2D(PrimitiveType type, void *vertices, int32 numVertices,
 	int32 vertexType = GU_TEXTURE_32BITF | GU_COLOR_8888 |
 	    GU_VERTEX_32BITF | GU_TRANSFORM_2D;
 	if(indices && numIndices > 0){
-		uint16 *guIndices = static_cast<uint16 *>(sceGuGetMemory(sizeof(uint16)*numIndices));
+		uint16 *guIndices = static_cast<uint16 *>(allocTransientBytes(sizeof(uint16)*numIndices));
 		if(guIndices == nil)
 			return;
 		memcpy(guIndices, indices, sizeof(uint16)*numIndices);
+		sceKernelDcacheWritebackRange(guIndices, sizeof(uint16)*numIndices);
 		sceGuDrawArray(primitive, vertexType | GU_INDEX_16BIT,
 		    numIndices, guIndices, guVertices);
 	}else
@@ -293,6 +329,7 @@ beginUpdate(Camera *camera)
 	// endUpdate guarantees the GE has finished consuming it.
 	sceGuStart(GU_DIRECT, displayList[displayListIndex]);
 	listActive = 1;
+	transientVertexOffset = 0;
 	if(clearPending){
 		uint32 flags = 0;
 		if(pendingClearMode & Camera::CLEARIMAGE){
@@ -315,6 +352,8 @@ beginUpdate(Camera *camera)
 		sceGumMatrixMode(GU_VIEW);
 		sceGumLoadMatrix(reinterpret_cast<ScePspFMatrix4 *>(&camera->devView));
 	}
+	applyBlend();
+	applyBlendEnable();
 	applyFog();
 }
 
@@ -334,10 +373,10 @@ endUpdate(Camera*)
 			s_dlFrameCount = 0;
 			int32 wordsUsed = sceGuCheckList();
 			int32 bytesFree = (int32)((DISPLAY_LIST_WORDS - (uint32)wordsUsed) * sizeof(uint32));
-			printf("PSP_DL_STATS buf=%d used=%d/%d words (%d KiB free)\n",
+			printf("PSP_DL_STATS buf=%ld used=%ld/%d words (%ld KiB free)\n",
 			    displayListIndex, wordsUsed, DISPLAY_LIST_WORDS, bytesFree / 1024);
 			if(wordsUsed >= (int32)DISPLAY_LIST_WORDS)
-				printf("PSP_DL_OVERFLOW buf=%d words=%d\n",
+				printf("PSP_DL_OVERFLOW buf=%ld words=%ld\n",
 				    displayListIndex, wordsUsed);
 		}
 	}
@@ -373,14 +412,22 @@ setRenderState(int32 renderState, void *pointer)
 {
 	uint32 value = (uint32)(uintptr)pointer;
 	switch(renderState){
-	case TEXTURERASTER: state.texture = static_cast<Raster *>(pointer); break;
+	case TEXTURERASTER:
+		state.texture = static_cast<Raster *>(pointer);
+		/* Texture alpha participates in RenderWare's alpha-blend enable just
+		 * like vertex/material alpha.  Without this, transparent texels in
+		 * foliage, fences and baked-shadow cards are drawn as opaque black. */
+		state.textureAlpha = state.texture &&
+		    Raster::formatHasAlpha(state.texture->format);
+		applyBlendEnable();
+		break;
 	case TEXTUREADDRESS: state.addressU = state.addressV = value; break;
 	case TEXTUREADDRESSU: state.addressU = value; break;
 	case TEXTUREADDRESSV: state.addressV = value; break;
 	case TEXTUREFILTER: state.filter = value; break;
 	case VERTEXALPHA:
 		state.vertexAlpha = value;
-		if(value) sceGuEnable(GU_BLEND); else sceGuDisable(GU_BLEND);
+		applyBlendEnable();
 		break;
 	case SRCBLEND: state.srcBlend = value; applyBlend(); break;
 	case DESTBLEND: state.dstBlend = value; applyBlend(); break;
@@ -459,7 +506,7 @@ im3DTransform(void *vertices, int32 numVertices, Matrix *world, uint32 flags)
 		return;
 	Im3DVertex *source = static_cast<Im3DVertex *>(vertices);
 	im3DVertices = static_cast<GuIm3DVertex *>(
-	    sceGuGetMemory(sizeof(GuIm3DVertex)*numVertices));
+	    allocTransientBytes(sizeof(GuIm3DVertex)*numVertices));
 	if(im3DVertices == nil)
 		return;
 	for(int32 i = 0; i < numVertices; i++){
@@ -474,6 +521,7 @@ im3DTransform(void *vertices, int32 numVertices, Matrix *world, uint32 flags)
 		im3DVertices[i].y = source[i].position.y;
 		im3DVertices[i].z = source[i].position.z;
 	}
+	sceKernelDcacheWritebackRange(im3DVertices, sizeof(GuIm3DVertex)*numVertices);
 	ScePspFMatrix4 model;
 	memset(&model, 0, sizeof(model));
 	if(world){
@@ -501,7 +549,9 @@ im3DRenderPrimitive(PrimitiveType type)
 	int32 primitive = guPrimitive(type);
 	if(primitive < 0 || im3DVertices == nil || im3DVertexCount <= 0)
 		return;
-	applyTexture(1);
+	// Im3D effects (notably projected shadows) carry colour and alpha in the
+	// vertices.  REPLACE discarded both and turned shadow masks opaque black.
+	applyTexture(0);
 	sceGumDrawArray(primitive, GU_TEXTURE_32BITF | GU_COLOR_8888 |
 	    GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_3D,
 	    im3DVertexCount, nil, im3DVertices);
@@ -513,11 +563,12 @@ im3DRenderIndexedPrimitive(PrimitiveType type, void *indices, int32 numIndices)
 	int32 primitive = guPrimitive(type);
 	if(primitive < 0 || im3DVertices == nil || indices == nil || numIndices <= 0)
 		return;
-	uint16 *guIndices = static_cast<uint16 *>(sceGuGetMemory(sizeof(uint16)*numIndices));
+	uint16 *guIndices = static_cast<uint16 *>(allocTransientBytes(sizeof(uint16)*numIndices));
 	if(guIndices == nil)
 		return;
 	memcpy(guIndices, indices, sizeof(uint16)*numIndices);
-	applyTexture(1);
+	sceKernelDcacheWritebackRange(guIndices, sizeof(uint16)*numIndices);
+	applyTexture(0);
 	sceGumDrawArray(primitive, GU_TEXTURE_32BITF | GU_COLOR_8888 |
 	    GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_INDEX_16BIT | GU_TRANSFORM_3D,
 	    numIndices, guIndices, im3DVertices);
@@ -552,7 +603,9 @@ drawGeometry(const Matrix *world, PrimitiveType type,
 	model.w.w = 1.0f;
 	sceGumMatrixMode(GU_MODEL);
 	sceGumLoadMatrix(&model);
-	applyTexture(1);
+	// Static geometry contains RenderWare prelight colours.  Modulation keeps
+	// those colours instead of replacing them with the raw texture sample.
+	applyTexture(0);
 	sceGuDisable(GU_LIGHTING);
 	int32 vertexType = GU_TEXTURE_32BITF | GU_COLOR_8888 |
 	    GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_3D;
@@ -584,6 +637,10 @@ deviceSystem(DeviceReq req, void *arg, int32 n)
 		sceGuDepthRange(65535, 0);
 		sceGuScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 		sceGuEnable(GU_SCISSOR_TEST);
+		// Clip triangles that cross the camera frustum. Without GU clipping,
+		// large world polygons intersecting the near plane can disappear and
+		// expose the geometry below them (most visibly on bridge road decks).
+		sceGuEnable(GU_CLIP_PLANES);
 		sceGuDepthFunc(GU_GEQUAL);
 		sceGuShadeModel(GU_SMOOTH);
 		applyBlend();
