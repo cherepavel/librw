@@ -33,6 +33,7 @@ struct PspGeometryInstance {
 	uint32 numVertices;
 	uint32 numIndices;
 	uint32 numMeshes;
+	PrimitiveType primitive;
 	void *allocation;
 	PspGeometryVertex *vertices;
 	uint16 *indices;
@@ -69,6 +70,19 @@ instanceGeometry(Geometry *geometry)
 	if(meshHeader->numMeshes == 0 || meshHeader->totalIndices == 0 ||
 	   static_cast<uint32>(geometry->numVertices) > UINT16_MAX)
 		return false;
+	bool32 convertStrip = meshHeader->flags & MeshHeader::TRISTRIP;
+	uint32 convertedIndices = meshHeader->totalIndices;
+	if(convertStrip){
+		convertedIndices = 0;
+		Mesh *mesh = meshHeader->getMeshes();
+		for(uint32 i = 0; i < meshHeader->numMeshes; i++, mesh++){
+			if(mesh->numIndices > 2 &&
+			   mesh->numIndices - 2 > (UINT_MAX - convertedIndices)/3)
+				return false;
+			if(mesh->numIndices > 2)
+				convertedIndices += (mesh->numIndices - 2)*3;
+		}
+	}
 
 	size_t headerSize = sizeof(PspGeometryInstance) +
 	    sizeof(PspMeshInstance)*(meshHeader->numMeshes - 1);
@@ -81,9 +95,9 @@ instanceGeometry(Geometry *geometry)
 	memset(instance, 0, headerSize);
 
 	size_t vertexSize = sizeof(PspGeometryVertex)*geometry->numVertices;
-	size_t indexSize = sizeof(uint16)*meshHeader->totalIndices;
+	size_t indexSize = sizeof(uint16)*convertedIndices;
 	if(vertexSize/sizeof(PspGeometryVertex) != static_cast<size_t>(geometry->numVertices) ||
-	   indexSize/sizeof(uint16) != meshHeader->totalIndices ||
+	   indexSize/sizeof(uint16) != convertedIndices ||
 	   vertexSize > SIZE_MAX - indexSize - 31){
 		rwFree(instance);
 		return false;
@@ -97,8 +111,9 @@ instanceGeometry(Geometry *geometry)
 	instance->header.platform = PLATFORM_PSP;
 	instance->serialNumber = meshHeader->serialNum;
 	instance->numVertices = geometry->numVertices;
-	instance->numIndices = meshHeader->totalIndices;
+	instance->numIndices = 0;
 	instance->numMeshes = meshHeader->numMeshes;
+	instance->primitive = PRIMTYPETRILIST;
 	instance->vertices = static_cast<PspGeometryVertex *>(align16(instance->allocation));
 	instance->indices = static_cast<uint16 *>(align16(
 	    reinterpret_cast<uint8 *>(instance->vertices) + vertexSize));
@@ -128,32 +143,55 @@ instanceGeometry(Geometry *geometry)
 
 	Mesh *mesh = meshHeader->getMeshes();
 	uint32 indexOffset = 0;
+	uint32 sourceIndexCount = 0;
 	for(uint32 i = 0; i < meshHeader->numMeshes; i++, mesh++){
-		if(mesh->numIndices > meshHeader->totalIndices - indexOffset){
+		if(mesh->numIndices > meshHeader->totalIndices - sourceIndexCount){
 			rwFree(instance->allocation);
 			rwFree(instance);
 			return false;
 		}
+		sourceIndexCount += mesh->numIndices;
 		PspMeshInstance &dst = instance->meshes[i];
 		dst.indexOffset = indexOffset;
-		dst.numIndices = mesh->numIndices;
+		dst.numIndices = 0;
 		dst.material = mesh->material;
 		dst.vertexAlpha = 0;
-		memcpy(instance->indices + indexOffset, mesh->indices,
-		    sizeof(uint16)*mesh->numIndices);
+		if(convertStrip){
+			for(uint32 j = 2; j < mesh->numIndices; j++){
+				uint16 a = mesh->indices[j-2];
+				uint16 b = mesh->indices[j-1];
+				uint16 c = mesh->indices[j];
+				if(a == b || b == c || a == c)
+					continue;
+				if(j & 1){
+					instance->indices[indexOffset++] = b;
+					instance->indices[indexOffset++] = a;
+				}else{
+					instance->indices[indexOffset++] = a;
+					instance->indices[indexOffset++] = b;
+				}
+				instance->indices[indexOffset++] = c;
+				dst.numIndices += 3;
+			}
+		}else{
+			memcpy(instance->indices + indexOffset, mesh->indices,
+			    sizeof(uint16)*mesh->numIndices);
+			dst.numIndices = mesh->numIndices;
+			indexOffset += mesh->numIndices;
+		}
 		if(geometry->colors)
 			for(uint32 j = 0; j < mesh->numIndices; j++)
 				if(geometry->colors[mesh->indices[j]].alpha != 255){
 					dst.vertexAlpha = 1;
 					break;
 				}
-		indexOffset += mesh->numIndices;
 	}
-	if(indexOffset != meshHeader->totalIndices){
+	if(sourceIndexCount != meshHeader->totalIndices || indexOffset > convertedIndices){
 		rwFree(instance->allocation);
 		rwFree(instance);
 		return false;
 	}
+	instance->numIndices = indexOffset;
 	sceKernelDcacheWritebackRange(instance->vertices, vertexSize);
 	sceKernelDcacheWritebackRange(instance->indices, indexSize);
 	geometry->instData = &instance->header;
@@ -190,8 +228,7 @@ renderMeshes(Atomic *atomic, PspGeometryInstance *data,
     const PspGeometryVertex *vertices)
 {
 	Geometry *geometry = atomic->geometry;
-	PrimitiveType primitive = geometry->meshHeader->flags & MeshHeader::TRISTRIP ?
-	    PRIMTYPETRISTRIP : PRIMTYPETRILIST;
+	PrimitiveType primitive = data->primitive;
 	const Matrix *world = atomic->getFrame() ? atomic->getFrame()->getLTM() : nil;
 	for(uint32 i = 0; i < data->numMeshes; i++){
 		PspMeshInstance &mesh = data->meshes[i];

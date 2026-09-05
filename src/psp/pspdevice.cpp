@@ -102,16 +102,7 @@ updateCameraMatrices(Camera *camera)
 	memset(projection, 0, sizeof(projection));
 	float32 inverseWindowX = 1.0f/camera->viewWindow.x;
 	float32 inverseWindowY = 1.0f/camera->viewWindow.y;
-	/* PSP has a 16-bit depth buffer. re3 can temporarily lower the camera near
-	 * plane to 0.05 around collision geometry; combined with a city-scale far
-	 * plane that destroys enough depth precision for overlapping road/LOD
-	 * triangles to alternate visibly while the camera moves. Keep the logical
-	 * RenderWare clip plane unchanged, but use a conservative floor for the GU
-	 * projection. The normal gameplay near plane (0.9) is unaffected. */
-	float32 projectionNear = camera->nearPlane;
-	if(camera->projection == Camera::PERSPECTIVE && projectionNear < 0.5f)
-		projectionNear = 0.5f;
-	float32 inverseDepth = 1.0f/(camera->farPlane-projectionNear);
+	float32 inverseDepth = 1.0f/(camera->farPlane-camera->nearPlane);
 	projection[0] = inverseWindowX;
 	projection[5] = inverseWindowY;
 	projection[8] = camera->viewOffset.x*inverseWindowX;
@@ -119,9 +110,9 @@ updateCameraMatrices(Camera *camera)
 	projection[12] = -projection[8];
 	projection[13] = -projection[9];
 	if(camera->projection == Camera::PERSPECTIVE){
-		projection[10] = (camera->farPlane+projectionNear)*inverseDepth;
+		projection[10] = (camera->farPlane+camera->nearPlane)*inverseDepth;
 		projection[11] = 1.0f;
-		projection[14] = -2.0f*projectionNear*camera->farPlane*inverseDepth;
+		projection[14] = -2.0f*camera->nearPlane*camera->farPlane*inverseDepth;
 	}else{
 		projection[10] = 2.0f*inverseDepth;
 		projection[14] = -(camera->farPlane+camera->nearPlane)*inverseDepth;
