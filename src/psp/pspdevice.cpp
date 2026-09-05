@@ -133,7 +133,7 @@ struct RenderStateCache {
 	Raster *texture;
 	uint32 addressU, addressV;
 	uint32 filter;
-	uint32 vertexAlpha;
+	uint32 vertexAlpha, textureAlpha;
 	uint32 srcBlend, dstBlend;
 	uint32 zTest, zWrite;
 	uint32 fogEnable, fogColor;
@@ -143,10 +143,21 @@ struct RenderStateCache {
 
 static RenderStateCache state = {
 	nil, Texture::WRAP, Texture::WRAP, Texture::LINEAR,
-	0, BLENDSRCALPHA, BLENDINVSRCALPHA,
+	0, 0, BLENDSRCALPHA, BLENDINVSRCALPHA,
 	1, 1, 0, 0, CULLBACK, ALPHAALWAYS, 0
 };
 static Camera *activeCamera;
+
+static void
+applyBlendEnable(void)
+{
+	if(!listActive)
+		return;
+	if(state.vertexAlpha || state.textureAlpha)
+		sceGuEnable(GU_BLEND);
+	else
+		sceGuDisable(GU_BLEND);
+}
 
 static int32
 guPrimitive(PrimitiveType type)
@@ -341,6 +352,8 @@ beginUpdate(Camera *camera)
 		sceGumMatrixMode(GU_VIEW);
 		sceGumLoadMatrix(reinterpret_cast<ScePspFMatrix4 *>(&camera->devView));
 	}
+	applyBlend();
+	applyBlendEnable();
 	applyFog();
 }
 
@@ -399,14 +412,22 @@ setRenderState(int32 renderState, void *pointer)
 {
 	uint32 value = (uint32)(uintptr)pointer;
 	switch(renderState){
-	case TEXTURERASTER: state.texture = static_cast<Raster *>(pointer); break;
+	case TEXTURERASTER:
+		state.texture = static_cast<Raster *>(pointer);
+		/* Texture alpha participates in RenderWare's alpha-blend enable just
+		 * like vertex/material alpha.  Without this, transparent texels in
+		 * foliage, fences and baked-shadow cards are drawn as opaque black. */
+		state.textureAlpha = state.texture &&
+		    Raster::formatHasAlpha(state.texture->format);
+		applyBlendEnable();
+		break;
 	case TEXTUREADDRESS: state.addressU = state.addressV = value; break;
 	case TEXTUREADDRESSU: state.addressU = value; break;
 	case TEXTUREADDRESSV: state.addressV = value; break;
 	case TEXTUREFILTER: state.filter = value; break;
 	case VERTEXALPHA:
 		state.vertexAlpha = value;
-		if(value) sceGuEnable(GU_BLEND); else sceGuDisable(GU_BLEND);
+		applyBlendEnable();
 		break;
 	case SRCBLEND: state.srcBlend = value; applyBlend(); break;
 	case DESTBLEND: state.dstBlend = value; applyBlend(); break;
@@ -616,6 +637,10 @@ deviceSystem(DeviceReq req, void *arg, int32 n)
 		sceGuDepthRange(65535, 0);
 		sceGuScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 		sceGuEnable(GU_SCISSOR_TEST);
+		// Clip triangles that cross the camera frustum. Without GU clipping,
+		// large world polygons intersecting the near plane can disappear and
+		// expose the geometry below them (most visibly on bridge road decks).
+		sceGuEnable(GU_CLIP_PLANES);
 		sceGuDepthFunc(GU_GEQUAL);
 		sceGuShadeModel(GU_SMOOTH);
 		applyBlend();
