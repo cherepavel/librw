@@ -249,9 +249,26 @@ applyTexture(bool32 replace)
 		sceGuClutMode(GU_PSM_8888, 0, 0xFF, 0);
 		sceGuClutLoad(32, native.palette);
 	}
-	sceGuTexMode(native.pixelFormat, 0, 0, native.swizzled);
-	sceGuTexImage(0, state.texture->originalWidth, state.texture->originalHeight,
-	    native.bufferWidth, native.pixels);
+	int32 maxMip = 0;
+	int32 numLevels = state.texture->getNumLevels();
+	for(int32 level = 1; level < numLevels && level <= 7; level++){
+		NativeRaster mip;
+		if(!getNativeRasterLevel(state.texture, level, &mip) ||
+		   mip.pixelFormat != native.pixelFormat || mip.swizzled != native.swizzled)
+			break;
+		maxMip = level;
+	}
+	sceGuTexMode(native.pixelFormat, maxMip, 0, native.swizzled);
+	for(int32 level = 0; level <= maxMip; level++){
+		NativeRaster mip;
+		if(!getNativeRasterLevel(state.texture, level, &mip))
+			break;
+		int32 width = state.texture->originalWidth >> level;
+		int32 height = state.texture->originalHeight >> level;
+		if(width < 1) width = 1;
+		if(height < 1) height = 1;
+		sceGuTexImage(level, width, height, mip.bufferWidth, mip.pixels);
+	}
 	/* The full game switches resident TXD rasters many times per frame.  The GE
 	 * texture cache is not coherent with a new system-memory image/CLUT binding;
 	 * the single-texture smoke tests did not expose this. */
@@ -263,8 +280,36 @@ applyTexture(bool32 replace)
 	 * expands its normalized UVs to texels in copyVertices instead. */
 	sceGuTexScale(1.0f, 1.0f);
 	sceGuTexOffset(0.0f, 0.0f);
-	sceGuTexFilter(state.filter == Texture::NEAREST ? GU_NEAREST : GU_LINEAR,
-	    state.filter == Texture::NEAREST ? GU_NEAREST : GU_LINEAR);
+	int32 minFilter = state.filter == Texture::NEAREST ? GU_NEAREST : GU_LINEAR;
+	int32 magFilter = minFilter;
+	if(maxMip > 0){
+		switch(state.filter){
+		case Texture::NEAREST:
+			break;
+		case Texture::MIPNEAREST:
+			minFilter = GU_NEAREST_MIPMAP_NEAREST;
+			magFilter = GU_NEAREST;
+			break;
+		case Texture::LINEARMIPNEAREST:
+			minFilter = GU_NEAREST_MIPMAP_LINEAR;
+			magFilter = GU_NEAREST;
+			break;
+		case Texture::LINEARMIPLINEAR:
+			minFilter = GU_LINEAR_MIPMAP_LINEAR;
+			magFilter = GU_LINEAR;
+			break;
+		case Texture::LINEAR:
+		case Texture::MIPLINEAR:
+		default:
+			// re3 requests LINEAR for world geometry. Use the mip chain when
+			// one is present to suppress road and facade shimmer in motion.
+			minFilter = GU_LINEAR_MIPMAP_NEAREST;
+			magFilter = GU_LINEAR;
+			break;
+		}
+	}
+	sceGuTexLevelMode(GU_TEXTURE_AUTO, 0.0f);
+	sceGuTexFilter(minFilter, magFilter);
 	sceGuTexWrap(state.addressU == Texture::CLAMP ? GU_CLAMP : GU_REPEAT,
 	    state.addressV == Texture::CLAMP ? GU_CLAMP : GU_REPEAT);
 }
